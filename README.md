@@ -14,5 +14,6 @@ I like the idea of implimenting this in BASIC rather than 6502 assemblers becaus
 
 I've included Justine's `lisp.js` to demonstrate one way to implement this minimal lisp. It can be read as either C or Javascript.
 
-Also, this is the link to Justine's blog article about the friendly sectorlisp implementation: https://justine.lol/sectorlisp2/
+I've also included the Justine's assembler version
 
+Also, this is the link to Justine's blog article about the friendly sectorlisp implementation: https://justine.lol/sectorlisp2/
