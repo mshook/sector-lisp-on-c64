@@ -1,0 +1,761 @@
+ ▐▛███▜▌   Claude Code v2.1.119
+▝▜█████▛▘  Sonnet 4.6 · Claude Pro
+  ▘▘ ▝▝    ~/projects/sector-lisp-on-c64
+
+❯ /init                                                                         
+
+● I'll explore the codebase to understand the structure before suggesting
+  improvements to the existing CLAUDE.md.
+
+  Searched for 1 pattern, read 5 files (ctrl+o to expand)
+
+● Now I have a clear picture. The existing CLAUDE.md is solid on the reference
+  architecture but is missing the concrete implementation decisions made in the
+  conversation log: the two-phase plan, VICE emulator, BASIC data model,
+  recursion strategy, and Phase 1 scope. I'll add those sections.
+
+● Update(CLAUDE.md)
+  ⎿  Added 72 lines
+       51  - BASIC line numbers required; GOSUB/RETURN for subroutines, n
+           o recursion stack — may need to simulate the call stack explic
+           itly
+       52  - C64 character set is uppercase-only by default, matching Sec
+           torLISP's all-caps atom convention
+       53  - The 6502 has no hardware multiply/divide; hash functions may
+            need simplification
+       54 +                                                              
+       55 +## Implementation Plan                                        
+       56 +                                                              
+       57 +Two phases: BASIC prototype first (validated on VICE emulator)
+          +, then 6502 assembly port.                                    
+       58 +                                                              
+       59 +### Phase 1: C64 BASIC (`lisp.bas`)                           
+       60 +                                                              
+       61 +**Scope:** Minimal core only — no `DEFINE`, no dot notation. B
+          +uiltins: `NIL T QUOTE COND ATOM EQ CAR CDR CONS`.             
+       62 +                                                              
+       63 +**Data representation** (matches `lisp.js` sign convention):  
+       64 +- `0` = NIL                                                   
+       65 +- Positive integer = atom index (intern table)                
+       66 +- Negative integer = cons cell (negated 1-based index)        
+       67 +                                                              
+       68 +**Memory layout:**                                            
+       69 +```basic                                                      
+       70 +DIM AS$(64)   ' atom string table                             
+       71 +DIM CH%(256)  ' car array                                     
+       72 +DIM CD%(256)  ' cdr array                                     
+       73 +```                                                           
+       74 +                                                              
+       75 +**Subroutine map:**                                           
+       76 +                                                              
+       77 +| Line | Subroutine  | Inputs          | Output |             
+       78 +|------|-------------|-----------------|--------|             
+       79 +| 1000 | INTERN      | TK$             | AX%    |             
+       80 +| 2000 | READ_EXPR   | IN$, IX%        | RV%    |             
+       81 +| 2100 | READ_LIST   | IN$, IX%        | RV%    |             
+       82 +| 3000 | EVAL        | EE%, EA%        | EV%    |             
+       83 +| 3100 | EVLIS       | EM%, EA%        | EV%    |             
+       84 +| 3200 | EVCON       | EC%, EA%        | EV%    |             
+       85 +| 3300 | APPLY       | AF%, AX%, AA%   | EV%    |             
+       86 +| 4000 | ASSOC       | SX%, SA%        | EV%    |             
+       87 +| 4100 | PAIRLIS     | PX%, PY%, PA%   | EV%    |             
+       88 +| 5000 | PRINT_OBJ   | PO%             | —      |             
+       89 +| 6000 | CONS_ALLOC  | CC%, DD%        | RV%    |             
+       90 +                                                              
+       91 +**Recursion:** Simulated via parallel stack arrays (`SK%`, `S1
+          +%`, `S2%`) since BASIC `GOSUB` cannot recurse.                
+       92 +                                                              
+       93 +**REPL skeleton:**                                            
+       94 +```basic                                                      
+       95 +100 PRINT "* "; : INPUT IN$                                   
+       96 +110 IX% = 1 : GOSUB 2000                                      
+       97 +120 EE% = RV% : EA% = 0 : GOSUB 3000                          
+       98 +130 PO% = EV% : GOSUB 5000                                    
+       99 +140 PRINT : GOTO 100                                          
+      100 +```                                                           
+      101 +                                                              
+      102 +### Phase 2: 6502 Assembly (`lisp.asm`)                       
+      103 +                                                              
+      104 +After BASIC prototype is validated:                           
+      105 +- Zero-page registers following `sectorlisp.S` conventions    
+      106 +- Cons heap at fixed RAM address (e.g. `$C000` downward)      
+      107 +- Screen I/O via KERNAL `CHROUT` ($FFD2) and `GETIN` ($FFE4)  
+      108 +- Assembler: ca65 or ACME                                     
+      109 +                                                              
+      110 +## Testing                                                    
+      111 +                                                              
+      112 +**Environment:** VICE emulator (`x64sc` for C64)              
+      113 +                                                              
+      114 +**Verification test suite:**                                  
+      115 +```lisp                                                       
+      116 +(QUOTE A)                              → A                    
+      117 +(CAR (QUOTE (A B C)))                  → A                    
+      118 +(CDR (QUOTE (A B C)))                  → (B C)                
+      119 +(ATOM (QUOTE A))                       → T                    
+      120 +(ATOM (QUOTE (A B)))                   → NIL                  
+      121 +(EQ (QUOTE A) (QUOTE A))               → T                    
+      122 +(CONS (QUOTE A) (QUOTE (B)))           → (A B)                
+      123 +(COND ((ATOM (QUOTE A)) (QUOTE YES)))  → YES                  
+      124 +((LAMBDA (X) (CAR X)) (QUOTE (A B)))  → A                     
+      125 +```                                                           
+
+● The CLAUDE.md has been updated with the key implementation decisions from the
+  conversation log:
+
+  - Implementation plan — two-phase approach (BASIC → assembly) with VICE
+  emulator
+  - Phase 1 scope — minimal core only (no DEFINE, no dot notation), with the
+  specific BASIC data model, array layout, subroutine numbering, and recursion
+  simulation strategy
+  - Phase 2 details — assembly toolchain options and key C64 KERNAL addresses
+  - Testing section — VICE emulator target and the nine-expression verification
+  suite
+
+  The original architecture documentation was already solid and is unchanged.
+
+✻ Crunched for 1m 3s
+
+❯ make a todo list so I can track your progress                                 
+
+● Here's the full task list:
+
+  ┌─────┬─────────────────────────────────────────────────────────┬──────────┐
+  │  #  │                          Task                           │  Phase   │
+  ├─────┼─────────────────────────────────────────────────────────┼──────────┤
+  │ 1   │ Set up lisp.bas file structure and REPL skeleton        │ BASIC    │
+  ├─────┼─────────────────────────────────────────────────────────┼──────────┤
+  │ 2   │ Implement INTERN (line 1000)                            │ BASIC    │
+  ├─────┼─────────────────────────────────────────────────────────┼──────────┤
+  │ 3   │ Implement READ_EXPR / READ_LIST (lines 2000–2100)       │ BASIC    │
+  ├─────┼─────────────────────────────────────────────────────────┼──────────┤
+  │ 4   │ Implement CONS_ALLOC (line 6000)                        │ BASIC    │
+  ├─────┼─────────────────────────────────────────────────────────┼──────────┤
+  │ 5   │ Implement ASSOC / PAIRLIS (lines 4000–4100)             │ BASIC    │
+  ├─────┼─────────────────────────────────────────────────────────┼──────────┤
+  │ 6   │ Implement EVAL / EVLIS / EVCON / APPLY (lines           │ BASIC    │
+  │     │ 3000–3300)                                              │          │
+  ├─────┼─────────────────────────────────────────────────────────┼──────────┤
+  │ 7   │ Implement PRINT_OBJ (line 5000)                         │ BASIC    │
+  ├─────┼─────────────────────────────────────────────────────────┼──────────┤
+  │ 8   │ Run verification test suite on VICE emulator            │ BASIC    │
+  ├─────┼─────────────────────────────────────────────────────────┼──────────┤
+  │ 9   │ Port to 6502 assembly (lisp.asm)                        │ Assembly │
+  └─────┴─────────────────────────────────────────────────────────┴──────────┘
+
+  Ready to start whenever you are — task 1 is the natural first step.
+
+✻ Baked for 1m 14s
+
+❯ begin task 1                                                                  
+❯ tell me when you're finished with task 1 
+
+● Write(lisp.bas)
+  ⎿  Wrote 42 lines to lisp.bas
+       1 10 REM SECTORLISP FOR COMMODORE 64
+       2 20 DIM AS$(64)
+       3 30 DIM CH%(256),CD%(256)
+       4 40 DIM SK%(64),S1%(64),S2%(64),S3%(64)
+       5 50 NA%=0:NC%=0:EA%=0:SP%=0
+       6 60 TK$="NIL":GOSUB 1000:KN%=AX%:TK$="T":GOSUB 1000:KT%=AX%
+       7 70 TK$="QUOTE":GOSUB 1000:KQ%=AX%:TK$="COND":GOSUB 1000:KC%=AX%
+       8 80 TK$="ATOM":GOSUB 1000:KA%=AX%:TK$="EQ":GOSUB 1000:KE%=AX%
+       9 90 TK$="CAR":GOSUB 1000:KR%=AX%:TK$="CDR":GOSUB 1000:KD%=AX%
+      10 95 TK$="CONS":GOSUB 1000:KO%=AX%
+     … +32 lines (ctrl+o to expand)
+
+● Task 1 is done. Here's what was created in lisp.bas:
+
+  - Lines 10–50: Array declarations — AS$(64) atom table, CH%(256)/CD%(256) cons
+   heap, SK%/S1%/S2%/S3% eval stack for simulated recursion
+  - Lines 60–95: Startup — interns the 9 builtins and captures their indices
+  (KN%, KT%, KQ%, KC%, KA%, KE%, KR%, KD%, KO%)
+  - Lines 100–140: REPL loop (matches the plan exactly)
+  - Line 1000: INTERN is fully implemented (linear scan + append) since it's
+  needed for startup
+  - Lines 2000–6000: All other subroutines are stubs (RV%=0:RETURN or
+  EV%=0:RETURN) — placeholders for tasks 2–7
+
+  Ready to move on to task 2 (READ_EXPR / READ_LIST) or 3 (CONS_ALLOC) whenever
+  you say.
+
+✻ Baked for 3m 2s
+
+❯ Please start task 2 and tell me when you're done                              
+
+● INTERN was already written as part of the task 1 skeleton since startup
+  depends on it. Let me verify the implementation is complete and correct.
+
+  Read 1 file (ctrl+o to expand)
+
+● The implementation is correct and complete:
+
+  - 1010: scans atom 1 through NA%
+  - 1020: returns immediately with AX% pointing to the match if found
+  - 1040: if not found, appends the new atom and returns its index
+
+  No changes needed. Marking done.
+
+● Task 2 is done — INTERN was already fully implemented in task 1 since startup
+  requires it. Ready for task 3 (READ_EXPR / READ_LIST) whenever you'd like.
+
+❯ Perform task 3. Tell me when it is finished.                                  
+
+● The challenge here is mutual recursion between READ_EXPR and READ_LIST. I'll
+  use an iterative loop in READ_LIST (via GOTO) to avoid blowing BASIC's GOSUB
+  stack on list elements, and save/restore state on our SK%/S1%/S2% stack around
+   each recursive GOSUB call for nested lists.
+
+  Read 1 file (ctrl+o to expand)
+
+● Update(lisp.bas)
+  ⎿  Added 22 lines, removed 2 lines
+      21  1040 NA%=NA%+1:AS$(NA%)=TK$:AX%=NA%
+      22  1050 RETURN
+      23  2000 REM READ_EXPR: IN$,IX% -> RV%
+      24 -2010 RV%=0:RETURN                                              
+      24 +2005 IF IX%>LEN(IN$) THEN RV%=KN%:RETURN                       
+      25 +2010 IF MID$(IN$,IX%,1)<=" " THEN IX%=IX%+1:GOTO 2005          
+      26 +2015 IF MID$(IN$,IX%,1)<>"(" THEN GOTO 2030                    
+      27 +2020 IX%=IX%+1:GOSUB 2100:RETURN                               
+      28 +2030 TK$=""                                                    
+      29 +2035 IF IX%>LEN(IN$) THEN GOTO 2055                            
+      30 +2040 C$=MID$(IN$,IX%,1)                                        
+      31 +2045 IF C$<=" " OR C$="(" OR C$=")" THEN GOTO 2055             
+      32 +2050 TK$=TK$+C$:IX%=IX%+1:GOTO 2035                            
+      33 +2055 IF TK$="" THEN RV%=KN%:RETURN                             
+      34 +2060 GOSUB 1000:RV%=AX%:RETURN                                 
+      35  2100 REM READ_LIST: IN$,IX% -> RV%
+      26 -2110 RV%=0:RETURN                                              
+      36 +2102 RH%=0:RT%=0                                               
+      37 +2105 IF IX%>LEN(IN$) THEN RV%=RH%:RETURN                       
+      38 +2110 IF MID$(IN$,IX%,1)<=" " THEN IX%=IX%+1:GOTO 2105          
+      39 +2115 IF MID$(IN$,IX%,1)=")" THEN IX%=IX%+1:RV%=RH%:RETURN      
+      40 +2120 SP%=SP%+1:S1%(SP%)=RH%:S2%(SP%)=RT%                       
+      41 +2125 GOSUB 2000:RP%=RV%                                        
+      42 +2130 RH%=S1%(SP%):RT%=S2%(SP%):SP%=SP%-1                       
+      43 +2135 CC%=RP%:DD%=0:GOSUB 6000                                  
+      44 +2140 IF RH%=0 THEN RH%=RV%:RT%=RV%:GOTO 2105                   
+      45 +2145 CD%(-RT%)=RV%:RT%=RV%                                     
+      46 +2150 GOTO 2105                                                 
+      47  3000 REM EVAL: EE%,EA% -> EV%
+      48  3010 EV%=0:RETURN
+      49  3100 REM EVLIS: EM%,EA% -> EV%
+
+● Task 3 is done. Here's what was implemented:
+
+  READ_EXPR (2000–2060)
+  - Skips whitespace, dispatches on ( → READ_LIST, otherwise collects characters
+   into TK$ until a delimiter, then calls INTERN
+
+  READ_LIST (2100–2150)
+  - Iterative loop via GOTO — avoids using the BASIC GOSUB stack for list-level
+  recursion
+  - Before each element's GOSUB 2000, saves RH%/RT% (head and tail pointers)
+  onto S1%/S2% stack and restores them after — this is essential because a
+  nested list element will overwrite those variables
+  - Builds the cons list left-to-right by patching the cdr of the tail cell
+  (CD%(-RT%)=RV%) rather than reversing
+
+  The design means nesting depth (e.g. (A (B (C)))) uses the BASIC GOSUB stack,
+  while list breadth (e.g. (A B C D ...)) iterates — the right tradeoff for C64
+  BASIC.
+
+  Ready for task 4 (CONS_ALLOC) whenever you say.
+
+✻ Brewed for 3m 16s
+
+❯ Please do task 4 and let me know when you're done                             
+
+● CONS_ALLOC is the simplest subroutine — increment the free pointer, store
+  car/cdr, return the negative index.
+
+● Update(lisp.bas)  ⎿  Added 3 lines, removed 1 line
+      59  5000 REM PRINT_OBJ: PO%
+      60  5010 PRINT PO%;:RETURN
+      61  6000 REM CONS_ALLOC: CC%,DD% -> RV%
+      62 -6010 RV%=0:RETURN                                              
+      62 +6005 IF NC%>=256 THEN PRINT "?HEAP FULL":END                   
+      63 +6010 NC%=NC%+1:CH%(NC%)=CC%:CD%(NC%)=DD%:RV%=-NC%              
+      64 +6020 RETURN                                                    
+
+● Task 4 is done. Three lines:
+
+  - 6005: Guards against heap exhaustion (prints ?HEAP FULL and stops —
+  consistent with C64 BASIC's own ? error style)
+  - 6010: Increments NC%, writes CC%/DD% into CH%(NC%)/CD%(NC%), returns
+  RV%=-NC%
+
+  The negative return value is what ties the whole representation together —
+  READ_LIST, and later EVAL, distinguish cons cells from atoms by sign. Ready
+  for task 5 (ASSOC / PAIRLIS) when you are.
+
+❯ Do task 5 and tell me when you're done                                        
+
+  Read 1 file (ctrl+o to expand)
+
+● Both subroutines are iterative — ASSOC is a simple list walk (the reference is
+   tail-recursive so a GOTO loop is a direct translation), and PAIRLIS zips
+  params/args into alist pairs iteratively, linking the result tail to the
+  environment when done.
+
+  Note: C64 BASIC V2 has no ELSE, so the end-of-PAIRLIS branch (line 4108) uses
+  a conditional overwrite instead.
+
+● Update(lisp.bas)
+  ⎿  Added 15 lines, removed 2 lines
+      53  3300 REM APPLY: AF%,AX%,AA% -> EV%
+      54  3310 EV%=0:RETURN
+      55  4000 REM ASSOC: SX%,SA% -> EV%
+      56 -4010 EV%=0:RETURN                                              
+      56 +4005 IF SA%=0 THEN PRINT "?";AS$(SX%):PRINT:SP%=0:GOTO 100     
+      57 +4010 IF CH%(-CH%(-SA%))=SX% THEN EV%=CD%(-CH%(-SA%)):RETURN    
+      58 +4020 SA%=CD%(-SA%):GOTO 4005                                   
+      59  4100 REM PAIRLIS: PX%,PY%,PA% -> EV%
+      58 -4110 EV%=0:RETURN                                              
+      60 +4102 RG%=0:RS%=0                                               
+      61 +4105 IF PX%<>0 THEN GOTO 4110                                  
+      62 +4107 IF RS%<>0 THEN CD%(-RS%)=PA%                              
+      63 +4108 EV%=RG%:IF RG%=0 THEN EV%=PA%                             
+      64 +4109 RETURN                                                    
+      65 +4110 PN%=CH%(-PX%):PV%=CH%(-PY%)                               
+      66 +4115 IF PA%<>0 THEN IF CH%(-CH%(-PA%))=PN% THEN PA%=CD%(-PA%)  
+      67 +4120 CC%=PN%:DD%=PV%:GOSUB 6000:PP%=RV%                        
+      68 +4125 CC%=PP%:DD%=0:GOSUB 6000                                  
+      69 +4130 IF RG%=0 THEN RG%=RV%:RS%=RV%:GOTO 4145                   
+      70 +4135 CD%(-RS%)=RV%:RS%=RV%                                     
+      71 +4145 PX%=CD%(-PX%):PY%=CD%(-PY%):GOTO 4105                     
+      72  5000 REM PRINT_OBJ: PO%
+      73  5010 PRINT PO%;:RETURN
+      74  6000 REM CONS_ALLOC: CC%,DD% -> RV%
+
+● Task 5 is done. Here's what was implemented:
+
+  ASSOC (4000–4020) — iterative list walk:
+  - 4005: if alist is NIL, print ?ATOMNAME, reset stack pointer, jump back to
+  REPL
+  - 4010: if Car(Car(SA%)) == SX%, return Cdr(Car(SA%)) as the bound value
+  - 4020: advance to Cdr(SA%) and loop
+
+  PAIRLIS (4100–4145) — iterative zip of params/args onto the environment:
+  - 4110: extract one param name (PN%) and arg value (PV%)
+  - 4115: Peel — if the environment head already binds this name, skip it to
+  avoid duplicates
+  - 4120–4125: allocate (name . val) pair, then wrap it in an alist cell
+  - 4130–4135: append to growing result list
+  - 4107–4109: on exit, link the result tail to PA% (the remaining env), then
+  return
+
+  Ready for task 6 (EVAL / EVLIS / EVCON / APPLY) — the big one — whenever
+  you're ready.
+
+✻ Crunched for 2m 22s
+
+❯ break task 6 into subtasks                                                    
+
+● Now setting up the dependency: task 13 (EVAL + LAMBDA) should be done last,
+  after 10, 11, and 12.
+
+● Task 6 replaced with four subtasks:
+
+  ┌─────┬──────────────────────────────────┬────────────┐
+  │  #  │               Task               │ Depends on │
+  ├─────┼──────────────────────────────────┼────────────┤
+  │ 10  │ EVCON (3200)                     │ —          │
+  ├─────┼──────────────────────────────────┼────────────┤
+  │ 11  │ APPLY primitives (3300)          │ —          │
+  ├─────┼──────────────────────────────────┼────────────┤
+  │ 12  │ EVLIS (3100)                     │ —          │
+  ├─────┼──────────────────────────────────┼────────────┤
+  │ 13  │ EVAL + APPLY LAMBDA (3000, 3300) │ 10, 11, 12 │
+  └─────┴──────────────────────────────────┴────────────┘
+
+  Tasks 10–12 can be done in parallel or any order. Task 13 is blocked until all
+   three are done — it's the final wiring step that calls all the others. Ready
+  to start whenever you'd like.
+
+✻ Baked for 1m 17s
+
+❯ do subtask 10                                                                 
+
+● EVCON is tail-recursive on the false branch in the reference, which maps
+  directly to a GOTO loop. The only tricky part is saving EC% before calling
+  EVAL on the test (a nested COND in the test expression would overwrite it),
+  then restoring it to compute the body address.
+
+● Update(lisp.bas)
+  ⎿  Added 6 lines, removed 1 line
+      49  3100 REM EVLIS: EM%,EA% -> EV%
+      50  3110 EV%=0:RETURN
+      51  3200 REM EVCON: EC%,EA% -> EV%
+      52 -3210 EV%=0:RETURN                                              
+      52 +3205 IF EC%>=0 THEN PRINT "?COND":PRINT:SP%=0:GOTO 100         
+      53 +3210 SP%=SP%+1:S1%(SP%)=EC%                                    
+      54 +3215 EE%=CH%(-CH%(-EC%)):GOSUB 3000:ET%=EV%                    
+      55 +3220 EC%=S1%(SP%):SP%=SP%-1                                    
+      56 +3225 IF ET%<>0 THEN EE%=CH%(-CD%(-CH%(-EC%))):GOSUB 3000:RETURN
+      57 +3230 EC%=CD%(-EC%):GOTO 3205                                   
+      58  3300 REM APPLY: AF%,AX%,AA% -> EV%
+      59  3310 EV%=0:RETURN
+      60  4000 REM ASSOC: SX%,SA% -> EV%
+● Task 10 done. Six lines:
+
+  - 3205: guard — if EC% is NIL or an atom (malformed/exhausted COND), print
+  error and restart REPL
+  - 3210: push EC% onto the S-stack before calling EVAL (a nested COND in the
+  test would otherwise overwrite it)
+  - 3215: set EE% = Car(Car(EC%)) (the test expression), call EVAL, save result
+  in ET%
+  - 3220: restore EC% from stack
+  - 3225: if ET% is truthy, set EE% = Car(Cdr(Car(EC%))) (the body), call EVAL,
+  and return — no save needed since we're done with EC%
+  - 3230: test was false — advance to Cdr(EC%) and loop
+
+  Ready for tasks 11 or 12 (APPLY primitives or EVLIS) in any order.
+
+✻ Sautéed for 1m 20s
+
+❯ do task 11                                                                    
+
+● APPLY dispatches on AF%. Since C64 BASIC V2 has no ELSE, each conditional case
+   that sets a default then conditionally overrides needs two lines. LAMBDA is
+  left as a stub for task 13. Let me read the current stub first.
+
+  Read 1 file (ctrl+o to expand)
+
+● Update(lisp.bas)
+  ⎿  Added 14 lines, removed 1 line
+      56  3225 IF ET%<>0 THEN EE%=CH%(-CD%(-CH%(-EC%))):GOSUB 3000:RETURN
+      57  3230 EC%=CD%(-EC%):GOTO 3205
+      58  3300 REM APPLY: AF%,AX%,AA% -> EV%
+      59 -3310 EV%=0:RETURN                                              
+      59 +3302 IF AF%<0 THEN GOTO 3380                                   
+      60 +3305 IF AF%<>KO% THEN GOTO 3312                                
+      61 +3307 CC%=CH%(-AX%):DD%=CH%(-CD%(-AX%)):GOSUB 6000:EV%=RV%:RETUR
+         +N                                                              
+      62 +3312 IF AF%<>KE% THEN GOTO 3320                                
+      63 +3314 EV%=KN%:IF CH%(-AX%)=CH%(-CD%(-AX%)) THEN EV%=KT%         
+      64 +3316 RETURN                                                    
+      65 +3320 IF AF%<>KA% THEN GOTO 3328                                
+      66 +3322 EV%=KN%:IF CH%(-AX%)>=0 THEN EV%=KT%                      
+      67 +3324 RETURN                                                    
+      68 +3328 IF AF%=KR% THEN EV%=CH%(-CH%(-AX%)):RETURN                
+      69 +3332 IF AF%=KD% THEN EV%=CD%(-CH%(-AX%)):RETURN                
+      70 +3336 PRINT "?";AS$(AF%):PRINT:SP%=0:GOTO 100                   
+      71 +3380 REM LAMBDA - IMPLEMENTED IN TASK 13                       
+      72 +3390 EV%=0:RETURN                                              
+      73  4000 REM ASSOC: SX%,SA% -> EV%
+      74  4005 IF SA%=0 THEN PRINT "?";AS$(SX%):PRINT:SP%=0:GOTO 100
+      75  4010 IF CH%(-CH%(-SA%))=SX% THEN EV%=CD%(-CH%(-SA%)):RETURN
+
+● Task 11 done. Here's the dispatch chain:
+
+  ┌───────────┬─────────┬────────────────────────────────────────────────────┐
+  │   Line    │  Case   │                   Implementation                   │
+  ├───────────┼─────────┼────────────────────────────────────────────────────┤
+  │ 3302      │ AF% < 0 │ Lambda — jumps to stub at 3380 (task 13)           │
+  ├───────────┼─────────┼────────────────────────────────────────────────────┤
+  │ 3305–3307 │ CONS    │ CC%=Car(AX%), DD%=Car(Cdr(AX%)), GOSUB 6000        │
+  ├───────────┼─────────┼────────────────────────────────────────────────────┤
+  │ 3312–3316 │ EQ      │ Default NIL, override to T if                      │
+  │           │         │ Car(AX%)=Car(Cdr(AX%))                             │
+  ├───────────┼─────────┼────────────────────────────────────────────────────┤
+  │ 3320–3324 │ ATOM    │ Default NIL, override to T if Car(AX%)>=0 (atom or │
+  │           │         │  NIL)                                              │
+  ├───────────┼─────────┼────────────────────────────────────────────────────┤
+  │ 3328      │ CAR     │ CH%(-CH%(-AX%))                                    │
+  ├───────────┼─────────┼────────────────────────────────────────────────────┤
+  │ 3332      │ CDR     │ CD%(-CH%(-AX%))                                    │
+  ├───────────┼─────────┼────────────────────────────────────────────────────┤
+  │ 3336      │ Unknown │ Print ?FUNCNAME, reset stack, restart REPL         │
+  └───────────┴─────────┴────────────────────────────────────────────────────┘
+
+  Ready for task 12 (EVLIS) whenever you'd like.
+
+✻ Cogitated for 1m 51s
+
+❯ do task 12                                                                    
+
+● EVLIS is structurally identical to READ_LIST — iterate over a list, process
+  each element, build a new cons list of results — except each element is
+  evaluated via GOSUB 3000 instead of being read from a string. The same
+  save/restore pattern applies: push EM%, EG%, ES% onto the S-stack before each
+  EVAL call so a nested EVLIS (from a function application inside an argument)
+  can freely use those variables without corrupting the outer iteration.
+
+  EA% doesn't need saving here — task 13 will save/restore it inside APPLY
+  LAMBDA, which is the only place it changes.
+
+  Read 1 file (ctrl+o to expand)
+
+● Update(lisp.bas)
+  ⎿  Added 9 lines, removed 1 line
+      47  3000 REM EVAL: EE%,EA% -> EV%
+      48  3010 EV%=0:RETURN
+      49  3100 REM EVLIS: EM%,EA% -> EV%
+      50 -3110 EV%=0:RETURN                                              
+      50 +3102 EG%=0:ES%=0                                               
+      51 +3105 IF EM%=0 THEN EV%=EG%:RETURN                              
+      52 +3110 SP%=SP%+1:S1%(SP%)=EM%:S2%(SP%)=EG%:S3%(SP%)=ES%          
+      53 +3115 EE%=CH%(-EM%):GOSUB 3000:EP%=EV%                          
+      54 +3120 EM%=S1%(SP%):EG%=S2%(SP%):ES%=S3%(SP%):SP%=SP%-1          
+      55 +3125 CC%=EP%:DD%=0:GOSUB 6000                                  
+      56 +3130 IF EG%=0 THEN EG%=RV%:ES%=RV%:GOTO 3140                   
+      57 +3135 CD%(-ES%)=RV%:ES%=RV%                                     
+      58 +3140 EM%=CD%(-EM%):GOTO 3105                                   
+      59  3200 REM EVCON: EC%,EA% -> EV%
+      60  3205 IF EC%>=0 THEN PRINT "?COND":PRINT:SP%=0:GOTO 100
+      61  3210 SP%=SP%+1:S1%(SP%)=EC%
+
+● Task 12 done. Ten lines:
+
+  - 3102: initialise result head EG% and tail ES% to NIL
+  - 3105: if list exhausted, return accumulated result
+  - 3110: push EM%/EG%/ES% — the three variables a nested EVLIS would overwrite
+  - 3115: EE%=Car(EM%), call EVAL, save result in EP%
+  - 3120: restore the three saved variables, pop stack
+  - 3125: allocate a new cons cell for the evaluated value (cdr=0 for now)
+  - 3130: first element — set both head and tail, then advance
+  - 3135: subsequent elements — patch cdr of current tail, update tail
+  - 3140: advance EM% to Cdr(EM%), loop back
+
+  Tasks 10, 11, and 12 are all complete, so task 13 (EVAL + APPLY LAMBDA) is now
+   unblocked. Ready when you are.
+
+✻ Sautéed for 2m 7s
+
+❯ do task 13                                                                    
+
+● This is the wiring task — EVAL dispatches to all the subroutines built so far,
+   and APPLY LAMBDA ties in PAIRLIS and recursive EVAL. Let me read the current
+  stubs before editing.
+
+  Read 1 file (ctrl+o to expand)
+
+● Two changes needed: implement EVAL at the stub (line 3010), and replace the
+  LAMBDA stub at 3380–3390 with the real implementation.
+
+  EVAL dispatches on EE%:
+  - 0 → NIL
+  - positive → ASSOC lookup
+  - Car=QUOTE → return Car(Cdr(EE%))
+  - Car=COND → EVCON
+  - anything else → EVLIS the args (saving Car(EE%) in EF% first, since EVLIS
+  clobbers EE%), then APPLY
+
+  APPLY LAMBDA: extract param list and body from the lambda cons cell, call
+  PAIRLIS to extend the env, save/restore EA% around the body EVAL (this is the
+  only place EA% ever changes, which is why EVLIS and EVCON didn't need to save
+  it).
+
+● Update(lisp.bas)
+  ⎿  Added 8 lines, removed 1 line
+      45  2145 CD%(-RT%)=RV%:RT%=RV%
+      46  2150 GOTO 2105
+      47  3000 REM EVAL: EE%,EA% -> EV%
+      48 -3010 EV%=0:RETURN                                              
+      48 +3002 IF EE%=0 THEN EV%=0:RETURN                                
+      49 +3004 IF EE%>0 THEN SX%=EE%:SA%=EA%:GOSUB 4000:RETURN           
+      50 +3006 IF CH%(-EE%)<>KQ% THEN GOTO 3012                          
+      51 +3008 EV%=CH%(-CD%(-EE%)):RETURN                                
+      52 +3012 IF CH%(-EE%)<>KC% THEN GOTO 3018                          
+      53 +3014 EC%=CD%(-EE%):GOSUB 3200:RETURN                           
+      54 +3018 EF%=CH%(-EE%):EM%=CD%(-EE%):GOSUB 3100                    
+      55 +3020 AF%=EF%:AX%=EV%:AA%=EA%:GOSUB 3300:RETURN                 
+      56  3100 REM EVLIS: EM%,EA% -> EV%
+      57  3102 EG%=0:ES%=0
+      58  3105 IF EM%=0 THEN EV%=EG%:RETURN
+
+● Update(lisp.bas)  ⎿  Added 6 lines, removed 2 lines
+      83  3328 IF AF%=KR% THEN EV%=CH%(-CH%(-AX%)):RETURN
+      84  3332 IF AF%=KD% THEN EV%=CD%(-CH%(-AX%)):RETURN
+      85  3336 PRINT "?";AS$(AF%):PRINT:SP%=0:GOTO 100
+      86 -3380 REM LAMBDA - IMPLEMENTED IN TASK 13                       
+      87 -3390 EV%=0:RETURN                                              
+      86 +3380 REM LAMBDA: AF%,AX%,AA% -> EV%                            
+      87 +3382 PX%=CH%(-CD%(-AF%)):PY%=AX%:PA%=AA%:GOSUB 4100            
+      88 +3384 SP%=SP%+1:SK%(SP%)=EA%:EA%=EV%                            
+      89 +3385 EE%=CH%(-CD%(-CD%(-AF%)))                                 
+      90 +3386 GOSUB 3000                                                
+      91 +3388 EA%=SK%(SP%):SP%=SP%-1:RETURN                             
+      92  4000 REM ASSOC: SX%,SA% -> EV%
+      93  4005 IF SA%=0 THEN PRINT "?";AS$(SX%):PRINT:SP%=0:GOTO 100
+      94  4010 IF CH%(-CH%(-SA%))=SX% THEN EV%=CD%(-CH%(-SA%)):RETURN
+
+● Let me do a final check of the complete file to make sure everything looks
+  right end-to-end.
+
+  Read 1 file (ctrl+o to expand)
+
+● Everything looks correct. Let me verify the key interactions across all
+  subroutines are consistent:
+
+  - EVAL line 3018–3020: EF% saves Car(EE%) (the function) before EVLIS clobbers
+   EE%; AX%=EV% picks up the arg list after EVLIS; AA%=EA% is safe because APPLY
+   LAMBDA restores EA% ✓
+  - APPLY LAMBDA line 3384: saves EA% into SK%(SP%) at the current stack level
+  before changing it; the lambda body eval at 3386 can push to higher SP% levels
+   without conflict ✓
+  - EVCON line 3210: only pushes S1%(SP%)=EC%; EVLIS (called from within the
+  test EVAL) pushes at a higher SP% level ✓
+  - Stack arrays: S1%/S2%/S3% used by READ_LIST, EVLIS, EVCON at distinct SP%
+  levels; SK% used exclusively by APPLY LAMBDA ✓
+
+● Task 13 done. Here's what was implemented:
+
+  EVAL (3000–3020)
+
+  ┌───────────┬───────────────┬─────────────────────────────────────────────┐
+  │   Line    │     Case      │                   Action                    │
+  ├───────────┼───────────────┼─────────────────────────────────────────────┤
+  │ 3002      │ EE%=0 (NIL)   │ return NIL                                  │
+  ├───────────┼───────────────┼─────────────────────────────────────────────┤
+  │ 3004      │ EE%>0 (atom)  │ ASSOC lookup                                │
+  ├───────────┼───────────────┼─────────────────────────────────────────────┤
+  │ 3006–3008 │ Car=QUOTE     │ return Car(Cdr(EE%)) unevaluated            │
+  ├───────────┼───────────────┼─────────────────────────────────────────────┤
+  │ 3012–3014 │ Car=COND      │ EVCON on clause list                        │
+  ├───────────┼───────────────┼─────────────────────────────────────────────┤
+  │ 3018–3020 │ anything else │ save function in EF%, EVLIS the args, APPLY │
+  └───────────┴───────────────┴─────────────────────────────────────────────┘
+
+  APPLY LAMBDA (3380–3388)
+  - Extract param list: Car(Cdr(AF%))
+  - PAIRLIS zips params with already-evaluated args, extending the env
+  - Save EA% in SK%(SP%), set EA% to the new env
+  - EVAL the body (Car(Cdr(Cdr(AF%))))
+  - Restore EA%
+
+  The evaluator is now fully wired. Only task 7 (PRINT_OBJ) and task 8
+  (verification) remain. Ready when you are.
+
+✻ Crunched for 5m 3s
+
+❯ do task 7                                                                     
+
+● PRINT_OBJ needs to handle three cases. The list case is the interesting one:
+  walk cons cells iteratively with GOTO (same pattern as READ_LIST), but print
+  each Car via a recursive GOSUB 5000, saving the current cell position in
+  S1%(SP%) around each call.
+
+● Update(lisp.bas)
+  ⎿  Added 9 lines, removed 1 line
+      107  4135 CD%(-RS%)=RV%:RS%=RV%
+      108  4145 PX%=CD%(-PX%):PY%=CD%(-PY%):GOTO 4105
+      109  5000 REM PRINT_OBJ: PO%
+      110 -5010 PRINT PO%;:RETURN                                        
+      110 +5002 IF PO%=0 THEN PRINT "NIL";:RETURN                        
+      111 +5004 IF PO%>0 THEN PRINT AS$(PO%);:RETURN                     
+      112 +5006 PRINT "(";                                               
+      113 +5008 SP%=SP%+1:S1%(SP%)=PO%                                   
+      114 +5010 PO%=CH%(-S1%(SP%)):GOSUB 5000                            
+      115 +5012 PO%=CD%(-S1%(SP%)):SP%=SP%-1                             
+      116 +5014 IF PO%=0 THEN PRINT ")";:RETURN                          
+      117 +5016 IF PO%<0 THEN PRINT " ";:SP%=SP%+1:S1%(SP%)=PO%:GOTO 5010
+      118 +5018 PRINT " . ";:GOSUB 5000:PRINT ")";:RETURN                
+      119  6000 REM CONS_ALLOC: CC%,DD% -> RV%
+      120  6005 IF NC%>=256 THEN PRINT "?HEAP FULL":END
+      121  6010 NC%=NC%+1:CH%(NC%)=CC%:CD%(NC%)=DD%:RV%=-NC%
+
+● Task 7 done. Nine lines:
+
+  ┌───────────┬───────────┬──────────────────────────────────────────────────┐
+  │   Line    │   Case    │                      Action                      │
+  ├───────────┼───────────┼──────────────────────────────────────────────────┤
+  │ 5002      │ PO%=0     │ print NIL                                        │
+  ├───────────┼───────────┼──────────────────────────────────────────────────┤
+  │ 5004      │ PO%>0     │ print AS$(PO%) (the interned atom string)        │
+  ├───────────┼───────────┼──────────────────────────────────────────────────┤
+  │ 5006–5008 │ list open │ print (, push PO% onto S-stack                   │
+  ├───────────┼───────────┼──────────────────────────────────────────────────┤
+  │ 5010      │           │ set PO%=Car(cell), recursively print the element │
+  ├───────────┼───────────┼──────────────────────────────────────────────────┤
+  │ 5012      │           │ PO%=Cdr(cell), pop stack                         │
+  ├───────────┼───────────┼──────────────────────────────────────────────────┤
+  │ 5014      │ Cdr=0     │ proper list end — print )                        │
+  ├───────────┼───────────┼──────────────────────────────────────────────────┤
+  │ 5016      │ Cdr<0     │ another cons cell — print  , push it, loop       │
+  ├───────────┼───────────┼──────────────────────────────────────────────────┤
+  │ 5018      │ Cdr>0     │ dotted pair — print ., print the atom, print )   │
+  └───────────┴───────────┴──────────────────────────────────────────────────┘
+
+  The save/restore of S1%(SP%) around the recursive GOSUB 5000 at line 5010 is
+  what makes nested lists like (A (B C)) work — the inner PRINT_OBJ call pushes
+  to a higher SP% level without clobbering the outer cell pointer.
+
+  Only task 8 (verification on VICE) remains before the BASIC prototype is
+  complete. Ready when you are.
+
+✻ Brewed for 2m 4s
+
+❯ /export                                                                       
+  ⎿  Conversation exported to: /home/mshook/projects/sector-lisp-on-c64/2026-04-
+     25-182953-command-messageinitcommand-message.txt
+
+❯ I'm holding my breath. Run task 8: verificaiton                               
+
+● Let me first check what emulation tools are available before attempting to run
+   the suite.
+
+● Bash(which x64sc x64 cbmbasic petcat 2>/dev/null; apt list --installed
+      2>/dev/null | grep -i vice; find /usr -name "x64sc" -o -name "cbmbasic"
+      2>/dev/null)
+  ⎿  dconf-service/oldstable,now 0.40.0-4 amd64 [installed,automatic]
+     glib-networking-services/oldstable,now 2.74.0-4 amd64 [installed,autom
+     atic]
+
+● Bash(apt-cache search vice 2>/dev/null | grep -i commodore; apt-cache search
+      cbmbasic 2>/dev/null; find / -name "cbmbasic" 2>/dev/null; pip show
+      cbmbasic 2>/dev/null)
+  ⎿  Error: Exit code 1
+
+● Bash(which node python3 python 2>/dev/null; node --version 2>/dev/null;
+      python3 --version 2>/dev/null)
+  ⎿  /usr/bin/node
+     /usr/bin/python3
+     v18.20.4
+     Python 3.11.2
+
+● Neither VICE nor cbmbasic is installed, but Python 3 is available. I'll write
+  a direct Python port of lisp.bas — same algorithm, same variable names — and
+  run all 9 test cases through it. This is a stronger check than a mental trace
+  since any logic bug will surface as a wrong answer.
+
+● Write(verify.py)
+  ⎿  Wrote 397 lines to verify.py
+       1 #!/usr/bin/env python3
+       2 """Direct Python port of lisp.bas for verification.
+       3 Same algorithm, same variable names, same index conventions."""
+       4 
+       5 class LispMachine:
+       6     def __init__(self):
+       7         self.AS = [''] * 70     # atom strings  (1-indexed)
+       8         self.CH = [0] * 300     # car array      (1-indexed)
+       9         self.CD = [0] * 300     # cdr array      (1-indexed)
+      10         self.SK = [0] * 70      # stack: EA saves
+     … +427 lines (ctrl+o to expand)
+
+● Bash(python3 verify.py)  ⎿  PASS  (QUOTE A)
+     PASS  (CAR (QUOTE (A B C)))
+     PASS  (CDR (QUOTE (A B C)))
+     … +8 lines (ctrl+o to expand)
+
+● 9/9. Let me run a few more expressions to stress-test things the suite doesn't
+   cover — nested lambdas, multi-arg lambda, CDR chain — before marking this
+  done.
+
+● Bash(python3 - <<'EOF'
+      from verify import LispMachine…)
+  ⎿  PASS  ((LAMBDA (X Y) (CONS X Y)) (QUOTE A) (QUOTE (B)))
+     PASS  (CONS (QUOTE A) (CONS (QUOTE B) (CONS (QUOTE C) (QUOTE ()))))
+     PASS  ((LAMBDA (X) (CDR X)) (QUOTE (A B C)))
+     … +11 lines (ctrl+o to expand)
+
+● Two bugs. Let me diagnose them before touching the BASIC file.
+
+● Bash(python3 - <<'EOF'
+      from verify import LispMachine…)
+  ⎿    EVAL EE=-1 EF_before=0
+       EVAL EE=-2 EF_before=5
+       EVAL EE=-3 EF_before=9
+     … +10 lines (ctrl+o to expand)
+  ⎿  Interrupted · What should Claude do instead?
