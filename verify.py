@@ -207,12 +207,12 @@ class LispMachine:
             self.EV = self.RV
             return
         if self.AF == self.KE:
-            self.EV = self.KN
+            self.EV = 0
             if self.CH[-self.AX] == self.CH[-self.CD[-self.AX]]:
                 self.EV = self.KT
             return
         if self.AF == self.KA:
-            self.EV = self.KN
+            self.EV = 0
             if self.CH[-self.AX] >= 0:
                 self.EV = self.KT
             return
@@ -222,10 +222,13 @@ class LispMachine:
         if self.AF == self.KD:
             self.EV = self.CD[-self.CH[-self.AX]]
             return
-        name = self.AS[self.AF] if 0 < self.AF <= self.NA else str(self.AF)
-        self.out.append(f"?{name}")
-        self.SP = 0
-        self.error = True
+        # Not a builtin — look it up in the environment (mirrors lisp.js Apply line 207)
+        self.SX = self.AF
+        self.SA = self.AA
+        self.assoc()
+        if not self.error:
+            self.AF = self.EV
+            self.apply_func()
 
     # ------------------------------------------------------------------
     # 3380  APPLY LAMBDA
@@ -336,6 +339,14 @@ class LispMachine:
         self.RV = -self.NC
 
     # ------------------------------------------------------------------
+    # 7000  DUMP: show active AS, CH, CD
+    # ------------------------------------------------------------------
+    def dump_state(self):
+        print("AS:", " ".join(f"{i}={self.AS[i]}" for i in range(1, self.NA + 1)))
+        print("CH:", " ".join(f"{i}={self.CH[i]}" for i in range(1, self.NC + 1)))
+        print("CD:", " ".join(f"{i}={self.CD[i]}" for i in range(1, self.NC + 1)))
+
+    # ------------------------------------------------------------------
     # Lines 60-95: intern builtins
     # ------------------------------------------------------------------
     def startup(self):
@@ -356,6 +367,7 @@ class LispMachine:
         self.out = []
         self.error = False
         self.read_expr()
+        self.dump_state()
         if self.error:
             return ''.join(self.out)
         self.EE = self.RV
@@ -378,6 +390,7 @@ TESTS = [
     ("(CONS (QUOTE A) (QUOTE (B)))",                 "(A B)"),
     ("(COND ((ATOM (QUOTE A)) (QUOTE YES)))",        "YES"),
     ("((LAMBDA (X) (CAR X)) (QUOTE (A B)))",         "A"),
+    ("((LAMBDA (FF X) (FF X)) (QUOTE (LAMBDA (X) (COND ((ATOM X) X) ((QUOTE T) (FF (CAR X)))))) (QUOTE ((A) B C)))",                               "A"),
 ]
 
 if __name__ == "__main__":

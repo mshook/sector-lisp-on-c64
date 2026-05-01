@@ -1,0 +1,22 @@
+ ▐▛███▜▌   Claude Code v2.1.119
+▝▜█████▛▘  Sonnet 4.6 · Claude Pro
+  ▘▘ ▝▝    ~/projects/sector-lisp-on-c64
+
+❯ Why does the line "1010 FOR AX%=1 TO NA%" get the error "?SYNTAX ERROR IN     
+  1010" in a Commodore 64 emulator?                                             
+
+● C64 BASIC V2 does not support the % integer type suffix. That's a Microsoft
+  BASIC feature (GW-BASIC, Applesoft, QBasic), but Commodore 64 BASIC V2 has no 
+  integer variable type — all numeric variables are floating point, and % is
+  simply not valid as part of a variable name.
+
+  The parser hits AX% and chokes on the % character.
+
+  Fix: Remove all % suffixes from variable names throughout your program. AX%
+  becomes AX, NA% becomes NA, RV% becomes RV, etc.
+
+  One caveat: C64 BASIC only distinguishes the first two characters of a
+  variable name, so CA and CAR are the same variable. Keep that in mind when
+  shortening names from the subroutine map in your CLAUDE.md (e.g. CC% and CD%
+  would clash with CC and CD if you also have variables starting with those
+  pairs).

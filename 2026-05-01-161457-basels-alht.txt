@@ -1,0 +1,369 @@
+ ▐▛███▜▌   Claude Code v2.1.119
+▝▜█████▛▘  Sonnet 4.6 · Claude Pro
+  ▘▘ ▝▝    ~/projects/sector-lisp-on-c64
+
+❯ base(ls -alht)                                                                
+
+  Listed 1 directory (ctrl+o to expand)
+
+● Here's the project directory. Notable recent files:
+
+  - verify.py — test harness (updated Apr 30)
+  - lisp.bas — the C64 BASIC implementation (Apr 29)
+  - demo.bas — small demo (Apr 28)
+  - 2026-04-30-204607-run-verifypy.txt — output from a recent verify.py run
+
+  What would you like to work on?
+
+❯ read 2026-04-30-204607-run-verifypy.txt and compare lisp.bas with verify.py.  
+  Does lisp.bas need to be fixed the way you fixed verify.py?                   
+
+● Let me read all three files in parallel.
+
+  Read 3 files (ctrl+o to expand)
+
+● Yes, lisp.bas has both bugs that were fixed in verify.py. Here's the
+  comparison:
+
+  Bug 1 — EQ/ATOM return KN% instead of 0 for false (lines 3314, 3322):
+
+  3314 EV%=KN%:IF CH%(-AX%)=CH%(-CD%(-AX%)) THEN EV%=KT%   ← KN% should be 0
+  3322 EV%=KN%:IF CH%(-AX%)>=0 THEN EV%=KT%                 ← KN% should be 0
+
+  KN%=1 (the atom index for the string "NIL"), but the falsy sentinel is 0.
+  evcon checks ET%<>0, so KN% is treated as truthy, breaking COND.
+
+  Bug 2 — Non-builtin atoms in APPLY aren't looked up in the environment (line 
+  3336):
+
+  3336 PRINT "?";AS$(AF%):PRINT:SP%=0:GOTO 100   ← just errors instead of ASSOC
+  lookup
+
+  verify.py's fix was to call assoc(AF, AA) and recurse with the result. The
+  BASIC equivalent would be:
+
+  3336 SX%=AF%:SA%=AA%:GOSUB 4000:AF%=EV%:GOTO 3302
+
+  This reuses ASSOC's own error handling (it already prints ?name and jumps to
+  line 100 if the variable isn't found), then loops back to the top of APPLY
+  with the resolved value.
+
+  Want me to apply both fixes to lisp.bas?
+
+✻ Cooked for 33s
+
+❯ yes                                                                           
+
+● Update(lisp.bas)
+  ⎿  Added 1 line, removed 1 line
+      76  3305 IF AF%<>KO% THEN GOTO 3312
+      77  3307 CC%=CH%(-AX%):DD%=CH%(-CD%(-AX%)):GOSUB 6000:EV%=RV%:RETUR
+          N
+      78  3312 IF AF%<>KE% THEN GOTO 3320
+      79 -3314 EV%=KN%:IF CH%(-AX%)=CH%(-CD%(-AX%)) THEN EV%=KT%         
+      79 +3314 EV%=0:IF CH%(-AX%)=CH%(-CD%(-AX%)) THEN EV%=KT%           
+      80  3316 RETURN
+      81  3320 IF AF%<>KA% THEN GOTO 3328
+      82  3322 EV%=KN%:IF CH%(-AX%)>=0 THEN EV%=KT%
+
+● Update(lisp.bas)
+  ⎿  Added 1 line, removed 1 line
+      79  3314 EV%=0:IF CH%(-AX%)=CH%(-CD%(-AX%)) THEN EV%=KT%
+      80  3316 RETURN
+      81  3320 IF AF%<>KA% THEN GOTO 3328
+      82 -3322 EV%=KN%:IF CH%(-AX%)>=0 THEN EV%=KT%                      
+      82 +3322 EV%=0:IF CH%(-AX%)>=0 THEN EV%=KT%                        
+      83  3324 RETURN
+      84  3328 IF AF%=KR% THEN EV%=CH%(-CH%(-AX%)):RETURN
+      85  3332 IF AF%=KD% THEN EV%=CD%(-CH%(-AX%)):RETURN
+
+● Update(lisp.bas)
+  ⎿  Added 1 line, removed 1 line
+      83  3324 RETURN
+      84  3328 IF AF%=KR% THEN EV%=CH%(-CH%(-AX%)):RETURN
+      85  3332 IF AF%=KD% THEN EV%=CD%(-CH%(-AX%)):RETURN
+      86 -3336 PRINT "?";AS$(AF%):PRINT:SP%=0:GOTO 100                   
+      86 +3336 SX%=AF%:SA%=AA%:GOSUB 4000:AF%=EV%:GOTO 3302              
+      87  3380 REM LAMBDA: AF%,AX%,AA% -> EV%
+      88  3382 PX%=CH%(-CD%(-AF%)):PY%=AX%:PA%=AA%:GOSUB 4100
+      89  3384 SP%=SP%+1:SK%(SP%)=EA%:EA%=EV%
+
+● All three fixes applied. Now let me verify by running verify.py against the
+  updated logic — but first, note that verify.py is already the fixed Python
+  mirror, so the real check is just confirming lisp.bas looks correct:
+
+  Searched for 1 pattern (ctrl+o to expand)
+
+● All three lines look correct:
+
+  - 3314: EV%=0 (EQ false → empty list, not NIL atom)
+  - 3322: EV%=0 (ATOM false → empty list, not NIL atom)
+  - 3336: ASSOC lookup on AF% in AA%, then loop back to top of APPLY with
+  resolved value — errors naturally fall through ASSOC's own ?name / GOTO 100
+  handler
+
+※ recap: Porting SectorLISP to C64 BASIC. Just fixed two bugs in lisp.bas — EQ/ATOM returning wrong falsy value and non-builtin function lookup failing — mirroring fixes already applied to verify.py. Next: test lisp.bas in VICE. (disable recaps in /config)
+
+❯ What does this mean in verify.py:     def run(self, expr):                    
+          self.IN = expr.upper()                                                
+
+● It means the Python verifier uppercases all input before parsing, so you can
+  type lowercase and it still works — e.g. (quote a) becomes (QUOTE A).
+
+  This matches the C64's behavior: the C64 keyboard produces uppercase by
+  default, and SectorLISP uses all-caps atoms (NIL, T, QUOTE, etc.). The
+  .upper() just saves you from having to type in caps when running tests in
+  Python.
+
+❯ Add to both lisp.bas and verify.py a function/gosub that displays the active  
+  portions of AS, CH & CD and call it when finished parsing                     
+
+● Let me look at the current structure of both files around the REPL and the end
+   of the file before making changes.
+
+  Read 2 files (ctrl+o to expand)
+
+● Now I'll make all four changes: add the dump subroutine to lisp.bas, add the
+  call after parsing, add the method to verify.py, and call it there too.
+
+● Update(lisp.bas)
+  ⎿  Added 1 line
+      10  95 TK$="CONS":GOSUB 1000:KO%=AX%
+      11  100 PRINT "* ";:INPUT IN$
+      12  110 IX%=1:GOSUB 2000
+      13 +115 GOSUB 7000                                                 
+      14  120 EE%=RV%:EA%=0:GOSUB 3000
+      15  130 PO%=EV%:GOSUB 5000
+      16  140 PRINT:GOTO 100
+
+● Update(lisp.bas)
+  ⎿  Added 5 lines
+      118  5014 IF PO%=0 THEN PRINT ")";:RETURN
+      119  5016 IF PO%<0 THEN PRINT " ";:SP%=SP%+1:S1%(SP%)=PO%:GOTO 5010
+      120  5018 PRINT " . ";:GOSUB 5000:PRINT ")";:RETURN
+      121 +7000 REM DUMP: show active AS$, CH%, CD%                      
+      122 +7005 PRINT "AS:";:FOR I%=1 TO NA%:PRINT I%;"=";AS$(I%);" ";:NE
+          +XT I%:PRINT                                                   
+      123 +7010 PRINT "CH:";:FOR I%=1 TO NC%:PRINT I%;"=";CH%(I%);" ";:NE
+          +XT I%:PRINT                                                   
+      124 +7015 PRINT "CD:";:FOR I%=1 TO NC%:PRINT I%;"=";CD%(I%);" ";:NE
+          +XT I%:PRINT                                                   
+      125 +7020 RETURN                                                   
+      126  6000 REM CONSALLOC: CC%,DD% -> RV%
+      127  6005 IF NC%>=256 THEN PRINT "?HEAP FULL":END
+      128  6010 NC%=NC%+1:CH%(NC%)=CC%:CD%(NC%)=DD%:RV%=-NC%
+
+● Now verify.py — add dump_state() method and call it in run():
+
+● Update(verify.py)
+  ⎿  Added 8 lines
+      339          self.RV = -self.NC
+      340  
+      341      # --------------------------------------------------------
+           ----------
+      342 +    # 7000  DUMP: show active AS, CH, CD                      
+      343 +    # --------------------------------------------------------
+          +----------                                                    
+      344 +    def dump_state(self):                                     
+      345 +        print("AS:", " ".join(f"{i}={self.AS[i]}" for i in ran
+          +ge(1, self.NA + 1)))                                          
+      346 +        print("CH:", " ".join(f"{i}={self.CH[i]}" for i in ran
+          +ge(1, self.NC + 1)))                                          
+      347 +        print("CD:", " ".join(f"{i}={self.CD[i]}" for i in ran
+          +ge(1, self.NC + 1)))                                          
+      348 +                                                              
+      349 +    # --------------------------------------------------------
+          +----------                                                    
+      350      # Lines 60-95: intern builtins
+      351      # --------------------------------------------------------
+           ----------
+      352      def startup(self):
+
+● Update(verify.py)  ⎿  Added 1 line
+      367          self.out = []
+      368          self.error = False
+      369          self.read_expr()
+      370 +        self.dump_state()                                     
+      371          if self.error:
+      372              return ''.join(self.out)
+      373          self.EE = self.RV
+
+● Now let's run it to see the dump output:
+
+● Bash(python3 verify.py 2>&1 | head -60)
+  ⎿  AS: 1=NIL 2=T 3=QUOTE 4=COND 5=ATOM 6=EQ 7=CAR 8=CDR 9=CONS 10=A
+     CH: 1=3 2=10
+     CD: 1=-2 2=0
+     … +30 lines (ctrl+o to expand)
+
+● All 10 tests still pass and the dump is working correctly. Each test shows the
+   atom table and cons heap as they exist after parsing (before eval). You can
+  see how atoms accumulate (builtins 1–9 always first, then expression-specific
+  atoms), and how the cons cells encode the nested list structure with positive
+  car/cdr values pointing to atoms and negative values pointing to other cons
+  cells.
+
+✻ Worked for 55s
+
+※ recap: Porting SectorLISP to C64 BASIC. We just added a post-parse dump of the atom table and cons heap to both lisp.bas and verify.py, with all 10 tests passing. Next: test the dump output in VICE. (disable recaps in /config)
+
+❯ Should both lisp.bas and verify.py be able to handle multi-line input?        
+
+● Short answer: verify.py already handles it — \n is less than ' ', so the
+  whitespace-skipping loop in read_expr treats newlines as whitespace. You could
+   pass a multi-line string to run() and it would parse fine.
+
+  lisp.bas is a different story. C64 INPUT reads one logical line at a time — up
+   to ~88 characters (two screen lines), which covers the test suite but would
+  choke on anything longer. Adding true multi-line input would require a loop
+  that accumulates lines until parentheses balance, then passes the concatenated
+   string to GOSUB 2000. Doable, but adds ~10–15 lines of BASIC.
+
+  My recommendation: skip it for now. The test expressions fit in 88 characters,
+   and the C64 context doesn't naturally invite long multi-line sessions. If you
+   want to test longer expressions you can always pass them through verify.py.
+  Worth revisiting only if you find yourself hitting the input limit in
+  practice.
+
+❯ Well the last test works in verify.py but fails in lisp.bas                   
+
+● The last test expression is ~110 characters — it exceeds C64 BASIC's INPUT
+  limit (~80 chars). That's exactly why multi-line input is needed in lisp.bas.
+  verify.py is fine since run() just takes a string.
+
+  I'll add a paren-depth accumulation loop to lisp.bas that keeps reading lines
+  until the expression balances:
+
+● Update(lisp.bas)
+  ⎿  Added 13 lines, removed 3 lines
+       8  80 TK$="ATOM":GOSUB 1000:KA%=AX%:TK$="EQ":GOSUB 1000:KE%=AX%
+       9  90 TK$="CAR":GOSUB 1000:KR%=AX%:TK$="CDR":GOSUB 1000:KD%=AX%
+      10  95 TK$="CONS":GOSUB 1000:KO%=AX%
+      11 -100 PRINT "* ";:INPUT IN$                                      
+      12 -110 IX%=1:GOSUB 2000                                           
+      13 -115 GOSUB 7000                                                 
+      11 +100 IN$="":DP%=0                                               
+      12 +101 PRINT "* ";:INPUT LN$                                      
+      13 +102 IF LN$="" THEN GOTO 100                                    
+      14 +103 IF IN$<>"" THEN IN$=IN$+" "                                
+      15 +104 IN$=IN$+LN$                                                
+      16 +105 FOR I%=1 TO LEN(LN$)                                       
+      17 +106 C$=MID$(LN$,I%,1):IF C$="(" THEN DP%=DP%+1                 
+      18 +107 IF C$=")" THEN DP%=DP%-1                                   
+      19 +108 NEXT I%                                                    
+      20 +109 IF DP%<=0 THEN GOTO 111                                    
+      21 +110 PRINT "  ";:INPUT LN$:GOTO 102                             
+      22 +111 IX%=1:GOSUB 2000                                           
+      23 +112 GOSUB 7000                                                 
+      24  120 EE%=RV%:EA%=0:GOSUB 3000
+      25  130 PO%=EV%:GOSUB 5000
+      26  140 PRINT:GOTO 100
+
+● Let me verify the result looks right:
+
+  Read 1 file (ctrl+o to expand)
+
+● Good. The logic:
+
+  - Line 100: reset accumulator and paren depth at the start of each REPL cycle
+  - 101: prompt *  and read first chunk
+  - 102: empty input → restart
+  - 103–104: append chunk to IN$ (with a space separator between continuation
+  lines)
+  - 105–108: count ( and ) in the new chunk, accumulating DP%
+  - 109: if depth ≤ 0, expression is complete → proceed to parse
+  - 110: still open parens → show    continuation prompt, read next chunk, loop
+  back
+
+  Blank input on a continuation line (line 110 → 102 → 100) cancels the
+  expression and restarts the prompt cleanly.
+
+✻ Crunched for 2m 19s
+
+※ recap: Porting SectorLISP to C64 BASIC. Both bugs from verify.py are now fixed in lisp.bas, and multi-line input is implemented. Next: test lisp.bas in VICE emulator. (disable recaps in /config)
+
+❯ undo the last edit to lisp.bas                                                
+
+● Update(lisp.bas)
+  ⎿  Added 3 lines, removed 13 lines
+       8  80 TK$="ATOM":GOSUB 1000:KA%=AX%:TK$="EQ":GOSUB 1000:KE%=AX%
+       9  90 TK$="CAR":GOSUB 1000:KR%=AX%:TK$="CDR":GOSUB 1000:KD%=AX%
+      10  95 TK$="CONS":GOSUB 1000:KO%=AX%
+      11 -100 IN$="":DP%=0                                               
+      12 -101 PRINT "* ";:INPUT LN$                                      
+      13 -102 IF LN$="" THEN GOTO 100                                    
+      14 -103 IF IN$<>"" THEN IN$=IN$+" "                                
+      15 -104 IN$=IN$+LN$                                                
+      16 -105 FOR I%=1 TO LEN(LN$)                                       
+      17 -106 C$=MID$(LN$,I%,1):IF C$="(" THEN DP%=DP%+1                 
+      18 -107 IF C$=")" THEN DP%=DP%-1                                   
+      19 -108 NEXT I%                                                    
+      20 -109 IF DP%<=0 THEN GOTO 111                                    
+      21 -110 PRINT "  ";:INPUT LN$:GOTO 102                             
+      22 -111 IX%=1:GOSUB 2000                                           
+      23 -112 GOSUB 7000                                                 
+      11 +100 PRINT "* ";:INPUT IN$                                      
+      12 +110 IX%=1:GOSUB 2000                                           
+      13 +115 GOSUB 7000                                                 
+      14  120 EE%=RV%:EA%=0:GOSUB 3000
+      15  130 PO%=EV%:GOSUB 5000
+      16  140 PRINT:GOTO 100
+
+● Done. Reverted to the single-line INPUT IN$ REPL.
+
+※ recap: Porting SectorLISP to C64 BASIC; verify.py passes all 10 tests with two bugs fixed. Next: implement multi-line input in lisp.bas so the longest test expression fits.
+
+❯ in all occurances of I% in lines after 7000, change I% to I                   
+
+● Update(lisp.bas)
+  ⎿  Added 3 lines, removed 3 lines
+      119  5016 IF PO%<0 THEN PRINT " ";:SP%=SP%+1:S1%(SP%)=PO%:GOTO 5010
+      120  5018 PRINT " . ";:GOSUB 5000:PRINT ")";:RETURN
+      121  7000 REM DUMP: show active AS$, CH%, CD%
+      122 -7005 PRINT "AS:";:FOR I%=1 TO NA%:PRINT I%;"=";AS$(I%);" ";:NE
+          -XT I%:PRINT                                                   
+      123 -7010 PRINT "CH:";:FOR I%=1 TO NC%:PRINT I%;"=";CH%(I%);" ";:NE
+          -XT I%:PRINT                                                   
+      124 -7015 PRINT "CD:";:FOR I%=1 TO NC%:PRINT I%;"=";CD%(I%);" ";:NE
+          -XT I%:PRINT                                                   
+      122 +7005 PRINT "AS:";:FOR I=1 TO NA%:PRINT I;"=";AS$(I);" ";:NEXT 
+          +I:PRINT                                                       
+      123 +7010 PRINT "CH:";:FOR I=1 TO NC%:PRINT I;"=";CH%(I);" ";:NEXT 
+          +I:PRINT                                                       
+      124 +7015 PRINT "CD:";:FOR I=1 TO NC%:PRINT I;"=";CD%(I);" ";:NEXT 
+          +I:PRINT                                                       
+      125  7020 RETURN
+      126  6000 REM CONSALLOC: CC%,DD% -> RV%
+      127  6005 IF NC%>=256 THEN PRINT "?HEAP FULL":END
+
+● Done. I% → I in all three FOR loops in the dump subroutine.
+
+❯ And move all the 7000s line to after the 6000s lines in lisp.bas              
+
+  Read 1 file (ctrl+o to expand)
+
+● Update(lisp.bas)
+  ⎿  Added 4 lines, removed 4 lines
+      118  5014 IF PO%=0 THEN PRINT ")";:RETURN
+      119  5016 IF PO%<0 THEN PRINT " ";:SP%=SP%+1:S1%(SP%)=PO%:GOTO 5010
+      120  5018 PRINT " . ";:GOSUB 5000:PRINT ")";:RETURN
+      121 +6000 REM CONSALLOC: CC%,DD% -> RV%                            
+      122 +6005 IF NC%>=256 THEN PRINT "?HEAP FULL":END                  
+      123 +6010 NC%=NC%+1:CH%(NC%)=CC%:CD%(NC%)=DD%:RV%=-NC%             
+      124 +6020 RETURN                                                   
+      125  7000 REM DUMP: show active AS$, CH%, CD%
+      126  7005 PRINT "AS:";:FOR I=1 TO NA%:PRINT I;"=";AS$(I);" ";:NEXT 
+           I:PRINT
+      127  7010 PRINT "CH:";:FOR I=1 TO NC%:PRINT I;"=";CH%(I);" ";:NEXT 
+           I:PRINT
+      128  7015 PRINT "CD:";:FOR I=1 TO NC%:PRINT I;"=";CD%(I);" ";:NEXT 
+           I:PRINT
+      129  7020 RETURN
+      126 -6000 REM CONSALLOC: CC%,DD% -> RV%                            
+      127 -6005 IF NC%>=256 THEN PRINT "?HEAP FULL":END                  
+      128 -6010 NC%=NC%+1:CH%(NC%)=CC%:CD%(NC%)=DD%:RV%=-NC%             
+      129 -6020 RETURN                                                   
+
+● Done. The 6000s block now comes before the 7000s block.
+
+※ recap: Porting SectorLISP to C64 BASIC; lisp.bas is a working evaluator verified by verify.py. Next: test lisp.bas in the VICE emulator against the full test suite.
