@@ -1,0 +1,919 @@
+
+; ******** Source: lisp.asm
+     1                          ; SectorLISP for Commodore 64 — 6502 assembly
+     2                          ; Translated from lisp.bas
+     3                          ; Build: acme --cpu 6502 lisp.asm
+     4                          
+     5                          !to "lisp.prg", cbm
+     6                          
+     7                          ; ============================================================
+     8                          ; KERNAL
+     9                          CHROUT  = $ffd2
+    10                          CHRIN   = $ffcf
+    11                          CR      = 13
+    12                          
+    13                          ; ============================================================
+    14                          ; DATA MEMORY
+    15                          ; Code ends around $1220 — all data arrays must start well above that.
+    16                          ch_lo   = $1400     ; car lo bytes  [index 1..255]
+    17                          ch_hi   = $1500     ; car hi bytes
+    18                          cd_lo   = $1600     ; cdr lo bytes
+    19                          cd_hi   = $1700     ; cdr hi bytes
+    20                          as_tab  = $1800     ; atom strings: 8 bytes/atom, atom k at as_tab+(k-1)*8
+    21                          in_buf  = $1c00     ; input line buffer (null-terminated)
+    22                          tok_buf = $1d00     ; 8-byte token scratch
+    23                          sk_lo   = $1d40     ; SK stack lo (saved EA)
+    24                          sk_hi   = $1d80     ; SK stack hi
+    25                          s1_lo   = $1dc0     ; S1 stack lo
+    26                          s1_hi   = $1e00     ; S1 stack hi
+    27                          s2_lo   = $1e40     ; S2 stack lo
+    28                          s2_hi   = $1e80     ; S2 stack hi
+    29                          s3_lo   = $1ec0     ; S3 stack lo
+    30                          s3_hi   = $1f00     ; S3 stack hi
+    31                          
+    32                          ; ============================================================
+    33                          ; ZERO PAGE — 1-byte counters/indices
+    34                          zNA     = $02       ; NA%  atom count
+    35                          zNC     = $03       ; NC%  cons count
+    36                          zSP     = $04       ; SP%  sim-stack pointer
+    37                          zIX     = $05       ; IX%  input buffer index (0-based)
+    38                          
+    39                          ; 1-byte builtin atom indices
+    40                          zKN     = $06       ; NIL
+    41                          zKT     = $07       ; T
+    42                          zKQ     = $08       ; QUOTE
+    43                          zKC     = $09       ; COND
+    44                          zKA     = $0a       ; ATOM
+    45                          zKE     = $0b       ; EQ
+    46                          zKR     = $0c       ; CAR
+    47                          zKD     = $0d       ; CDR
+    48                          zKO     = $0e       ; CONS
+    49                          
+    50                          ; 2-byte LISP values (lo at base addr, hi at base+1)
+    51                          zEA     = $10       ; EA%  environment
+    52                          zRV     = $12       ; RV%  read / general return value
+    53                          zEV     = $14       ; EV%  eval return value
+    54                          zEE     = $16       ; EE%  eval: expression
+    55                          zEF     = $18       ; EF%  eval: function
+    56                          zEM     = $1a       ; EM%  evlis: list
+    57                          zEG     = $1c       ; EG%  evlis: head
+    58                          zES     = $1e       ; ES%  evlis: tail
+    59                          zEP     = $20       ; EP%  evlis: element
+    60                          zET     = $22       ; ET%  evcon: test result
+    61                          zEC     = $24       ; EC%  evcon: cond list
+    62                          zAF     = $26       ; AF%  apply: function
+    63                          zAXX    = $28       ; AX%  apply: arg list
+    64                          zAA     = $2a       ; AA%  apply: environment
+    65                          zSX     = $2c       ; SX%  assoc: key
+    66                          zSA     = $2e       ; SA%  assoc: list
+    67                          zPX     = $30       ; PX%  pairlis: params
+    68                          zPY     = $32       ; PY%  pairlis: values
+    69                          zPA     = $34       ; PA%  pairlis: parent env
+    70                          zPN     = $36       ; PN%  pairlis: param name
+    71                          zPV     = $38       ; PV%  pairlis: param value
+    72                          zPP     = $3a       ; PP%  pairlis: cell temp
+    73                          zRG     = $3c       ; RG%  pairlis: result head
+    74                          zRS     = $3e       ; RS%  pairlis: result tail
+    75                          zCC     = $40       ; CC%  cons_alloc: car
+    76                          zDD     = $42       ; DD%  cons_alloc: cdr
+    77                          zRH     = $44       ; RH%  read_list: head
+    78                          zRT     = $46       ; RT%  read_list: tail
+    79                          zRP     = $48       ; RP%  read_list: element
+    80                          zPO     = $4a       ; PO%  print_obj: object
+    81                          zTKP    = $4c       ; token pointer (2-byte address into tok_buf or builtin strings)
+    82                          zASP    = $4e       ; atom-string pointer (2-byte address into as_tab)
+    83                          zAX     = $50       ; AX%  intern result (1-byte atom index, hi always 0)
+    84                          zDM     = $51       ; dump-mode flag: 0=off, 1=on
+    85                          
+    86                          ; ============================================================
+    87                          ; MACROS
+    88                          
+    89                          ; copy 16-bit ZP src -> dst
+    90                          !macro mv16 .d, .s {
+    91                              LDA .s   : STA .d
+    92                              LDA .s+1 : STA .d+1
+    93                          }
+    94                          
+    95                          ; zero a 16-bit ZP location
+    96                          !macro clr16 .d {
+    97                              LDA #0 : STA .d : STA .d+1
+    98                          }
+    99                          
+   100                          ; given a cons value in ZP .src, load its 1-based index into X
+   101                          ; (cons lo byte = 256-k, negate it: k = -lo)
+   102                          !macro cidx .src {
+   103                              LDA #0 : SEC : SBC .src
+   104                              TAX
+   105                          }
+   106                          
+   107                          ; load CH[cons .src] into A(lo)/Y(hi)
+   108                          !macro carof .src {
+   109                              LDA #0 : SEC : SBC .src : TAX
+   110                              LDA ch_lo,X : LDY ch_hi,X
+   111                          }
+   112                          
+   113                          ; load CD[cons .src] into A(lo)/Y(hi)
+   114                          !macro cdrof .src {
+   115                              LDA #0 : SEC : SBC .src : TAX
+   116                              LDA cd_lo,X : LDY cd_hi,X
+   117                          }
+   118                          
+   119                          ; ============================================================
+   120                          ; BASIC STUB: 10 SYS 2061
+   121                          * = $0801
+   122  0801 0b080a009e323036...!byte $0b,$08, $0a,$00, $9e, $32,$30,$36,$31, $00, $00,$00
+   123                          
+   124                          ; ============================================================
+   125                          ; STARTUP (lines 50-95)
+   126                          * = $080d
+   127                          
+   128                          !zone start
+   129                          start:
+   130  080d a900                   LDA #0
+   131  080f 850285038504           STA zNA : STA zNC : STA zSP
+   132  0815 85108511               STA zEA : STA zEA+1
+   133  0819 8551                   STA zDM
+   134                          
+   135  081b a926854ca909854d       LDA #<str_NIL   : STA zTKP : LDA #>str_NIL   : STA zTKP+1
+   136  0823 20bf09a5508506         JSR intern : LDA zAX : STA zKN
+   137                          
+   138  082a a92a854ca909854d       LDA #<str_T     : STA zTKP : LDA #>str_T     : STA zTKP+1
+   139  0832 20bf09a5508507         JSR intern : LDA zAX : STA zKT
+   140                          
+   141  0839 a92c854ca909854d       LDA #<str_QUOTE : STA zTKP : LDA #>str_QUOTE : STA zTKP+1
+   142  0841 20bf09a5508508         JSR intern : LDA zAX : STA zKQ
+   143                          
+   144  0848 a932854ca909854d       LDA #<str_COND  : STA zTKP : LDA #>str_COND  : STA zTKP+1
+   145  0850 20bf09a5508509         JSR intern : LDA zAX : STA zKC
+   146                          
+   147  0857 a937854ca909854d       LDA #<str_ATOM  : STA zTKP : LDA #>str_ATOM  : STA zTKP+1
+   148  085f 20bf09a550850a         JSR intern : LDA zAX : STA zKA
+   149                          
+   150  0866 a93c854ca909854d       LDA #<str_EQ    : STA zTKP : LDA #>str_EQ    : STA zTKP+1
+   151  086e 20bf09a550850b         JSR intern : LDA zAX : STA zKE
+   152                          
+   153  0875 a93f854ca909854d       LDA #<str_CAR   : STA zTKP : LDA #>str_CAR   : STA zTKP+1
+   154  087d 20bf09a550850c         JSR intern : LDA zAX : STA zKR
+   155                          
+   156  0884 a943854ca909854d       LDA #<str_CDR   : STA zTKP : LDA #>str_CDR   : STA zTKP+1
+   157  088c 20bf09a550850d         JSR intern : LDA zAX : STA zKD
+   158                          
+   159  0893 a947854ca909854d       LDA #<str_CONS  : STA zTKP : LDA #>str_CONS  : STA zTKP+1
+   160  089b 20bf09a550850e         JSR intern : LDA zAX : STA zKO
+   161                          
+   162                              ; fall through to repl
+   163                          
+   164                          ; ============================================================
+   165                          ; REPL (lines 100-140)
+   166                          !zone repl
+   167                          repl:
+   168  08a2 a9008504               LDA #0 : STA zSP
+   169  08a6 a90085108511           LDA #0 : STA zEA : STA zEA+1
+   170                          
+   171  08ac a92a20d2ff             LDA #'*' : JSR CHROUT
+   172  08b1 a92020d2ff             LDA #' ' : JSR CHROUT
+   173                          
+   174                              ; read line into in_buf
+   175  08b6 a200                   LDX #0
+   176                          .rdch:
+   177  08b8 20cfff                 JSR CHRIN
+   178  08bb c90df006               CMP #CR : BEQ .rddone
+   179  08bf 9d001c                 STA in_buf,X
+   180  08c2 e8d0f3                 INX : BNE .rdch
+   181                          .rddone:
+   182  08c5 a9009d001c             LDA #0 : STA in_buf,X   ; null-terminate
+   183  08ca a9008505               LDA #0 : STA zIX        ; reset input index
+   184                          
+   185                              ; check for "DUMP" toggle command
+   186  08ce ad001cc944d023         LDA in_buf+0 : CMP #'D' : BNE .not_dump
+   187  08d5 ad011cc955d01c         LDA in_buf+1 : CMP #'U' : BNE .not_dump
+   188  08dc ad021cc94dd015         LDA in_buf+2 : CMP #'M' : BNE .not_dump
+   189  08e3 ad031cc950d00e         LDA in_buf+3 : CMP #'P' : BNE .not_dump
+   190  08ea ad041cd009             LDA in_buf+4 : BNE .not_dump
+   191  08ef a55149018551           LDA zDM : EOR #1 : STA zDM
+   192  08f5 4ca208                 JMP repl
+   193                          .not_dump:
+   194                          
+   195  08f8 20010a                 JSR read_expr
+   196                          
+   197  08fb a551f003               LDA zDM : BEQ +
+   198  08ff 204c11                 JSR dump
+   199                          +:
+   200                          
+   201  0902 a5128516a5138517       +mv16 zEE, zRV
+   202  090a a90085108511           LDA #0 : STA zEA : STA zEA+1
+   203  0910 20fd0a                 JSR eval_
+   204                          
+   205  0913 a514854aa515854b       +mv16 zPO, zEV
+   206  091b 205410                 JSR print_obj
+   207                          
+   208  091e a90d20d2ff             LDA #CR : JSR CHROUT
+   209  0923 4ca208                 JMP repl
+   210                          
+   211                          ; ============================================================
+   212                          ; BUILTIN STRINGS
+   213  0926 4e494c00           str_NIL:   !text "NIL",0
+   214  092a 5400               str_T:     !text "T",0
+   215  092c 51554f544500       str_QUOTE: !text "QUOTE",0
+   216  0932 434f4e4400         str_COND:  !text "COND",0
+   217  0937 41544f4d00         str_ATOM:  !text "ATOM",0
+   218  093c 455100             str_EQ:    !text "EQ",0
+   219  093f 43415200           str_CAR:   !text "CAR",0
+   220  0943 43445200           str_CDR:   !text "CDR",0
+   221  0947 434f4e5300         str_CONS:  !text "CONS",0
+   222                          
+   223                          ; error message strings
+   224  094c 3f434f4e4400       str_econd: !text "?COND",0
+   225  0952 3f4845415000       str_eheap: !text "?HEAP",0
+   226  0958 3f00               str_equs:  !text "?",0      ; prefix for undefined variable
+   227                          
+   228                          ; ============================================================
+   229                          ; ERROR — print string at zTKP, CR, then restart REPL
+   230                          ; Caller sets zTKP before JSR err (or JMP err_repl directly)
+   231                          !zone errstr
+   232                          err_str:
+   233  095a a000                   LDY #0
+   234                          .lp:
+   235  095c b14cf00c               LDA (zTKP),Y : BEQ .done
+   236  0960 20d2ff                 JSR CHROUT
+   237  0963 e64cd0f5e64d4c5c...    INC zTKP : BNE .lp : INC zTKP+1 : JMP .lp
+   238                          .done:
+   239  096c a90d20d2ff             LDA #CR : JSR CHROUT
+   240  0971 4ca208                 JMP repl
+   241                          
+   242                          ; ============================================================
+   243                          ; SKIP_WS — advance zIX past whitespace in in_buf
+   244                          !zone skipws
+   245                          skip_ws:
+   246  0974 a605                   LDX zIX
+   247                          .lp:
+   248  0976 bd001cf008             LDA in_buf,X : BEQ .done
+   249  097b c921b004               CMP #' '+1 : BCS .done
+   250  097f e84c7609               INX : JMP .lp
+   251                          .done:
+   252  0983 860560                 STX zIX : RTS
+   253                          
+   254                          ; ============================================================
+   255                          ; STRCMP — compare null-terminated strings at zTKP and zASP
+   256                          ; Returns: Z set if equal
+   257                          !zone strcmp
+   258                          strcmp:
+   259  0986 a000                   LDY #0
+   260                          .lp:
+   261  0988 b14c                   LDA (zTKP),Y
+   262  098a d14ed00a               CMP (zASP),Y : BNE .ne
+   263  098e f000                   BEQ .check_end  ; chars equal; check null
+   264                          .check_end:
+   265  0990 b14c                   LDA (zTKP),Y    ; if it's null, both ended -> equal
+   266  0992 f005                   BEQ .eq
+   267  0994 c84c8809               INY : JMP .lp
+   268                          .ne:
+   269  0998 60                     RTS             ; Z clear
+   270                          .eq:
+   271  0999 60                     RTS             ; Z set (LDA #0 set it)
+   272                          
+   273                          ; ============================================================
+   274                          ; INTERN_ASP — set zASP to entry for atom k (1-based) in as_tab
+   275                          ; Input: zAX = k (1..127)
+   276                          ; Computes zASP = as_tab + (k-1)*8
+   277                          !zone internasp
+   278                          intern_asp:
+   279  099a a55038e901             LDA zAX : SEC : SBC #1  ; A = k-1 (0-based)
+   280  099f 854e                   STA zASP                 ; use zASP as temp lo
+   281  09a1 a900854f               LDA #0 : STA zASP+1
+   282  09a5 064e264f               ASL zASP : ROL zASP+1   ; *2
+   283  09a9 064e264f               ASL zASP : ROL zASP+1   ; *4
+   284  09ad 064e264f               ASL zASP : ROL zASP+1   ; *8 — zASP:zASP+1 = (k-1)*8
+   285  09b1 a54e186900854e         LDA zASP : CLC : ADC #<as_tab : STA zASP
+   286  09b8 a54f6918854f           LDA zASP+1 : ADC #>as_tab     : STA zASP+1
+   287  09be 60                     RTS
+   288                          
+   289                          ; ============================================================
+   290                          ; 1000 INTERN
+   291                          !zone intern
+   292                          intern:
+   293  09bf a9018550               LDA #1 : STA zAX
+   294                          .lp:
+   295                              ; if zAX > zNA, not found -> allocate
+   296  09c3 a502c550900e           LDA zNA : CMP zAX : BCC .new   ; NA < AX -> AX > NA -> not found
+   297                              ; set zASP = as_tab entry for zAX
+   298  09c9 209a09                 JSR intern_asp
+   299  09cc 208609                 JSR strcmp
+   300  09cf f005                   BEQ .found
+   301  09d1 e6504cc309             INC zAX : JMP .lp
+   302                          .found:
+   303  09d6 60                     RTS
+   304                          .new:
+   305  09d7 e602                   INC zNA
+   306  09d9 a5028550               LDA zNA : STA zAX
+   307  09dd 209a09                 JSR intern_asp          ; zASP = slot for new atom
+   308                              ; copy up to 7 bytes + null from zTKP to zASP
+   309  09e0 a000                   LDY #0
+   310                          .cp:
+   311  09e2 b14c914e               LDA (zTKP),Y : STA (zASP),Y
+   312  09e6 f00c                   BEQ .pad
+   313  09e8 c8c00790f5             INY : CPY #7 : BCC .cp
+   314  09ed a900a007914e           LDA #0 : LDY #7 : STA (zASP),Y ; force null at byte 7
+   315  09f3 60                     RTS
+   316                          .pad:
+   317  09f4 c8c008b007             INY : CPY #8 : BCS .done
+   318  09f9 a900914e4cf409         LDA #0 : STA (zASP),Y : JMP .pad
+   319                          .done:
+   320  0a00 60                     RTS
+   321                          
+   322                          ; ============================================================
+   323                          ; 2000 READ_EXPR
+   324                          !zone readexpr
+   325                          read_expr:
+   326  0a01 207409                 JSR skip_ws
+   327  0a04 a605                   LDX zIX
+   328  0a06 bd001cf009             LDA in_buf,X : BEQ .nil
+   329  0a0b c928d00c               CMP #'(' : BNE .atom
+   330  0a0f e605                   INC zIX
+   331  0a11 4c520a                 JMP read_list
+   332                          
+   333                          .nil:
+   334  0a14 a9008512851360         +clr16 zRV : RTS
+   335                          
+   336                          .atom:
+   337                              ; copy token from in_buf[zIX..] into tok_buf, null-terminate
+   338  0a1b a900854ca91d854d       LDA #<tok_buf : STA zTKP : LDA #>tok_buf : STA zTKP+1
+   339  0a23 a000                   LDY #0          ; Y = dest index into tok_buf
+   340                          .scan:
+   341  0a25 bd001c                 LDA in_buf,X    ; X = source index into in_buf
+   342  0a28 f015                   BEQ .tend
+   343  0a2a c9219011               CMP #' '+1 : BCC .tend
+   344  0a2e c928f00d               CMP #'(' : BEQ .tend
+   345  0a32 c929f009               CMP #')' : BEQ .tend
+   346  0a36 99001d                 STA tok_buf,Y
+   347  0a39 e8c8c00790e6           INX : INY : CPY #7 : BCC .scan
+   348                          .tend:
+   349  0a3f a90099001d             LDA #0 : STA tok_buf,Y
+   350  0a44 8605                   STX zIX         ; advance input past token
+   351  0a46 20bf09                 JSR intern
+   352  0a49 a5508512a9008513       LDA zAX : STA zRV : LDA #0 : STA zRV+1
+   353  0a51 60                     RTS
+   354                          
+   355                          ; ============================================================
+   356                          ; 2100 READ_LIST
+   357                          !zone readlist
+   358                          read_list:
+   359  0a52 a90085448545a900...    +clr16 zRH : +clr16 zRT
+   360                          .lp:
+   361  0a5e 207409                 JSR skip_ws
+   362  0a61 a605                   LDX zIX
+   363  0a63 bd001cd003             LDA in_buf,X : BNE +
+   364  0a68 4cf40a                 JMP .end                    ; end of input -> return RH
+   365  0a6b c929d003           +:  CMP #')' : BNE +
+   366  0a6f 4cf20a                 JMP .close
+   367                          +:
+   368                          
+   369                              ; push RH, RT on sim stack
+   370  0a72 a604                   LDX zSP
+   371  0a74 a5449dc01da5459d...    LDA zRH : STA s1_lo,X : LDA zRH+1 : STA s1_hi,X
+   372  0a7e a5469d401ea5479d...    LDA zRT : STA s2_lo,X : LDA zRT+1 : STA s2_hi,X
+   373  0a88 e604                   INC zSP
+   374                          
+   375  0a8a 20010a                 JSR read_expr               ; -> zRV = element
+   376                          
+   377  0a8d a5128548a5138549       +mv16 zRP, zRV
+   378                          
+   379                              ; pop RH, RT
+   380  0a95 c604a604               DEC zSP : LDX zSP
+   381  0a99 bdc01d8544bd001e...    LDA s1_lo,X : STA zRH : LDA s1_hi,X : STA zRH+1
+   382  0aa3 bd401e8546bd801e...    LDA s2_lo,X : STA zRT : LDA s2_hi,X : STA zRT+1
+   383                          
+   384                              ; cons_alloc(RP, 0)
+   385  0aad a5488540a5498541...    +mv16 zCC, zRP : +clr16 zDD
+   386  0abb 201311                 JSR cons_alloc              ; -> zRV = new cell
+   387                          
+   388                              ; if RH=0 then RH=RT=RV, else CD[-RT]=RV; RT=RV
+   389  0abe a5440545d013           LDA zRH : ORA zRH+1 : BNE .app
+   390  0ac4 a5128544a5138545...    +mv16 zRH, zRV : +mv16 zRT, zRV : JMP .lp
+   391                          .app:
+   392                              ; CD%(-RT%) = RV
+   393  0ad7 a90038e546aa           LDA #0 : SEC : SBC zRT : TAX
+   394  0add a5129d0016a5139d...    LDA zRV : STA cd_lo,X : LDA zRV+1 : STA cd_hi,X
+   395  0ae7 a5128546a5138547       +mv16 zRT, zRV
+   396  0aef 4c5e0a                 JMP .lp
+   397                          
+   398                          .close:
+   399  0af2 e605                   INC zIX
+   400                          .end:
+   401  0af4 a5448512a5458513...    +mv16 zRV, zRH : RTS
+   402                          
+   403                          ; ============================================================
+   404                          ; 3000 EVAL
+   405                          !zone eval
+   406                          eval_:
+   407                              ; 3002: if EE=0, EV=0
+   408  0afd a5160517d007           LDA zEE : ORA zEE+1 : BNE +
+   409  0b03 a9008514851560         +clr16 zEV : RTS
+   410                          
+   411                          +:  ; 3004: if EE>0 (atom, hi=0), assoc
+   412  0b0a a517d014               LDA zEE+1 : BNE +
+   413  0b0e a516852ca517852d...    +mv16 zSX, zEE : +mv16 zSA, zEA
+   414  0b1e 20bc0e60               JSR assoc : RTS
+   415                          
+   416                          +:  ; EE is cons. X = index of EE.
+   417  0b22 a90038e516aa           LDA #0 : SEC : SBC zEE : TAX
+   418  0b28 bd00148540bd0015...    LDA ch_lo,X : STA zCC : LDA ch_hi,X : STA zCC+1   ; car(EE) → zCC (temp)
+   419  0b32 bd0016851abd0017...    LDA cd_lo,X : STA zEM : LDA cd_hi,X : STA zEM+1   ; cdr(EE) → zEM
+   420                          
+   421                              ; 3006: car(EE) == QUOTE?
+   422  0b3c a541d017               LDA zCC+1 : BNE +
+   423  0b40 a540c508d011           LDA zCC : CMP zKQ : BNE +
+   424                              ; EV = CH[-CD[-EE]] = CH[-zEM]
+   425  0b46 a90038e51aaa           LDA #0 : SEC : SBC zEM : TAX
+   426  0b4c bd00148514bd0015...    LDA ch_lo,X : STA zEV : LDA ch_hi,X : STA zEV+1
+   427  0b56 60                     RTS
+   428                          
+   429                          +:  ; 3012: car(EE) == COND?
+   430  0b57 a541d012               LDA zCC+1 : BNE +
+   431  0b5b a540c509d00c           LDA zCC : CMP zKC : BNE +
+   432  0b61 a51a8524a51b8525       +mv16 zEC, zEM
+   433  0b69 206f0c60               JSR evcon : RTS
+   434                          
+   435                          +:  ; 3018/3020: function application
+   436                              ; Push car(EE) onto sim stack BEFORE evlis — evlis→eval_ will clobber zCC
+   437  0b6d a604                   LDX zSP
+   438  0b6f a5409dc01da5419d...    LDA zCC : STA s1_lo,X : LDA zCC+1 : STA s1_hi,X
+   439  0b79 e604                   INC zSP
+   440  0b7b 20a00b                 JSR evlis
+   441  0b7e c604a604               DEC zSP : LDX zSP
+   442  0b82 bdc01d8526bd001e...    LDA s1_lo,X : STA zAF : LDA s1_hi,X : STA zAF+1   ; AF = saved car(EE)
+   443  0b8c a5148528a5158529       +mv16 zAXX, zEV
+   444  0b94 a510852aa511852b       +mv16 zAA, zEA
+   445  0b9c 20160d60               JSR apply_ : RTS
+   446                          
+   447                          ; ============================================================
+   448                          ; 3100 EVLIS
+   449                          !zone evlis
+   450                          evlis:
+   451  0ba0 a900851c851da900...    +clr16 zEG : +clr16 zES
+   452                          .lp:
+   453                              ; 3105: if EM=0, EV=EG, return
+   454  0bac a51a051bd009           LDA zEM : ORA zEM+1 : BNE +
+   455  0bb2 a51c8514a51d8515...    +mv16 zEV, zEG : RTS
+   456                          
+   457                          +:  ; push EM, EG, ES
+   458  0bbb a604                   LDX zSP
+   459  0bbd a51a9dc01da51b9d...    LDA zEM : STA s1_lo,X : LDA zEM+1 : STA s1_hi,X
+   460  0bc7 a51c9d401ea51d9d...    LDA zEG : STA s2_lo,X : LDA zEG+1 : STA s2_hi,X
+   461  0bd1 a51e9dc01ea51f9d...    LDA zES : STA s3_lo,X : LDA zES+1 : STA s3_hi,X
+   462  0bdb e604                   INC zSP
+   463                          
+   464                              ; EE = CH[-EM]
+   465  0bdd a90038e51aaa           LDA #0 : SEC : SBC zEM : TAX
+   466  0be3 bd00148516bd0015...    LDA ch_lo,X : STA zEE : LDA ch_hi,X : STA zEE+1
+   467  0bed 20fd0a                 JSR eval_
+   468  0bf0 a5148520a5158521       +mv16 zEP, zEV
+   469                          
+   470                              ; pop EM, EG, ES
+   471  0bf8 c604a604               DEC zSP : LDX zSP
+   472  0bfc bdc01d851abd001e...    LDA s1_lo,X : STA zEM : LDA s1_hi,X : STA zEM+1
+   473  0c06 bd401e851cbd801e...    LDA s2_lo,X : STA zEG : LDA s2_hi,X : STA zEG+1
+   474  0c10 bdc01e851ebd001f...    LDA s3_lo,X : STA zES : LDA s3_hi,X : STA zES+1
+   475                          
+   476                              ; cons_alloc(EP, 0)
+   477  0c1a a5208540a5218541...    +mv16 zCC, zEP : +clr16 zDD
+   478  0c28 201311                 JSR cons_alloc
+   479                          
+   480                              ; if EG=0 then EG=ES=RV, else CD[-ES]=RV; ES=RV
+   481  0c2b a51c051dd013           LDA zEG : ORA zEG+1 : BNE .app
+   482  0c31 a512851ca513851d...    +mv16 zEG, zRV : +mv16 zES, zRV : JMP .next
+   483                          .app:
+   484  0c44 a90038e51eaa           LDA #0 : SEC : SBC zES : TAX
+   485  0c4a a5129d0016a5139d...    LDA zRV : STA cd_lo,X : LDA zRV+1 : STA cd_hi,X
+   486  0c54 a512851ea513851f       +mv16 zES, zRV
+   487                          .next:
+   488                              ; EM = CD[-EM]
+   489  0c5c a90038e51aaa           LDA #0 : SEC : SBC zEM : TAX
+   490  0c62 bd0016851abd0017...    LDA cd_lo,X : STA zEM : LDA cd_hi,X : STA zEM+1
+   491  0c6c 4cac0b                 JMP .lp
+   492                          
+   493                          ; ============================================================
+   494                          ; 3200 EVCON
+   495                          !zone evcon
+   496                          evcon:
+   497                              ; 3205: if EC>=0, error
+   498  0c6f a525d00f               LDA zEC+1 : BNE +
+   499  0c73 a94c854ca909854d       LDA #<str_econd : STA zTKP : LDA #>str_econd : STA zTKP+1
+   500  0c7b a90085044c5a09         LDA #0 : STA zSP : JMP err_str
+   501                          +:
+   502                              ; push EC
+   503  0c82 a604                   LDX zSP
+   504  0c84 a5249dc01da5259d...    LDA zEC : STA s1_lo,X : LDA zEC+1 : STA s1_hi,X
+   505  0c8e e604                   INC zSP
+   506                          
+   507                              ; EE = CH[-CH[-EC]]  (Caar(EC))
+   508  0c90 a90038e524aa           LDA #0 : SEC : SBC zEC : TAX
+   509  0c96 bd00148516bd0015...    LDA ch_lo,X : STA zEE : LDA ch_hi,X : STA zEE+1   ; zEE = CH[-EC] = car(EC)
+   510  0ca0 a90038e516aa           LDA #0 : SEC : SBC zEE : TAX
+   511  0ca6 bd00148516bd0015...    LDA ch_lo,X : STA zEE : LDA ch_hi,X : STA zEE+1   ; zEE = CH[-car(EC)] = caar(EC)
+   512  0cb0 20fd0a                 JSR eval_
+   513  0cb3 a5148522a5158523       +mv16 zET, zEV
+   514                          
+   515                              ; pop EC
+   516  0cbb c604a604               DEC zSP : LDX zSP
+   517  0cbf bdc01d8524bd001e...    LDA s1_lo,X : STA zEC : LDA s1_hi,X : STA zEC+1
+   518                          
+   519                              ; 3225: if ET<>0 then EE=CH[-CD[-CH[-EC]]], eval, return
+   520  0cc9 a5220523f034           LDA zET : ORA zET+1 : BEQ .skip
+   521                              ; EE = cadar(EC) = CH[-CD[-CH[-EC]]]
+   522  0ccf a90038e524aa           LDA #0 : SEC : SBC zEC : TAX
+   523  0cd5 bd00148516bd0015...    LDA ch_lo,X : STA zEE : LDA ch_hi,X : STA zEE+1   ; car(EC)
+   524  0cdf a90038e516aa           LDA #0 : SEC : SBC zEE : TAX
+   525  0ce5 bd00168516bd0017...    LDA cd_lo,X : STA zEE : LDA cd_hi,X : STA zEE+1   ; cdr(car(EC))
+   526  0cef a90038e516aa           LDA #0 : SEC : SBC zEE : TAX
+   527  0cf5 bd00148516bd0015...    LDA ch_lo,X : STA zEE : LDA ch_hi,X : STA zEE+1   ; car(cdr(car(EC)))
+   528  0cff 20fd0a60               JSR eval_ : RTS
+   529                          
+   530                          .skip:
+   531                              ; 3230: EC = CD[-EC]
+   532  0d03 a90038e524aa           LDA #0 : SEC : SBC zEC : TAX
+   533  0d09 bd00168524bd0017...    LDA cd_lo,X : STA zEC : LDA cd_hi,X : STA zEC+1
+   534  0d13 4c6f0c                 JMP evcon
+   535                          
+   536                          ; ============================================================
+   537                          ; 3300 APPLY
+   538                          !zone apply
+   539                          apply_:
+   540                              ; 3302: if AF<0, lambda
+   541  0d16 a5271003               LDA zAF+1 : BPL +
+   542  0d1a 4c310e                 JMP apply_lambda
+   543                          +:
+   544                          
+   545                              ; 3305: CONS
+   546  0d1d a526c50ed036           LDA zAF : CMP zKO : BNE +
+   547                              ; CC=CH[-AXX], DD=CH[-CD[-AXX]]
+   548  0d23 a90038e528aa           LDA #0 : SEC : SBC zAXX : TAX
+   549  0d29 bd00148540bd0015...    LDA ch_lo,X : STA zCC : LDA ch_hi,X : STA zCC+1
+   550  0d33 bd00168542bd0017...    LDA cd_lo,X : STA zDD : LDA cd_hi,X : STA zDD+1
+   551                              ; DD = CH[-DD] (cadr of arg list)
+   552  0d3d a90038e542aa           LDA #0 : SEC : SBC zDD : TAX
+   553  0d43 bd00148542bd0015...    LDA ch_lo,X : STA zDD : LDA ch_hi,X : STA zDD+1
+   554  0d4d 201311a5128514a5...    JSR cons_alloc : +mv16 zEV, zRV : RTS
+   555                          
+   556                          +:  ; 3312: EQ
+   557  0d59 a526c50bd041           LDA zAF : CMP zKE : BNE +
+   558  0d5f a90038e528aa           LDA #0 : SEC : SBC zAXX : TAX
+   559  0d65 bd00148542bd0015...    LDA ch_lo,X : STA zDD : LDA ch_hi,X : STA zDD+1   ; car(AXX) in zDD
+   560  0d6f bd00168540bd0017...    LDA cd_lo,X : STA zCC : LDA cd_hi,X : STA zCC+1   ; cdr(AXX)
+   561  0d79 a90038e540aa           LDA #0 : SEC : SBC zCC : TAX
+   562  0d7f bd00148540bd0015...    LDA ch_lo,X : STA zCC : LDA ch_hi,X : STA zCC+1   ; cadr(AXX) in zCC
+   563                              ; EV = (car==cadr) ? KT : 0
+   564  0d89 a90085148515           +clr16 zEV
+   565  0d8f a542c540d00a           LDA zDD   : CMP zCC   : BNE .eq_done
+   566  0d95 a543c541d004           LDA zDD+1 : CMP zCC+1 : BNE .eq_done
+   567  0d9b a5078514               LDA zKT : STA zEV
+   568                          .eq_done:
+   569  0d9f 60                     RTS
+   570                          
+   571                          +:  ; 3320: ATOM
+   572  0da0 a526c50ad01f           LDA zAF : CMP zKA : BNE +
+   573  0da6 a90038e528aa           LDA #0 : SEC : SBC zAXX : TAX
+   574  0dac bd00148540bd0015...    LDA ch_lo,X : STA zCC : LDA ch_hi,X : STA zCC+1
+   575  0db6 a90085148515           +clr16 zEV
+   576                              ; ATOM = T if car(AXX) >= 0 (hi byte = 0)
+   577  0dbc a541d004               LDA zCC+1 : BNE .atom_done     ; negative (cons) -> NIL
+   578  0dc0 a5078514               LDA zKT : STA zEV
+   579                          .atom_done:
+   580  0dc4 60                     RTS
+   581                          
+   582                          +:  ; 3328: CAR
+   583  0dc5 a526c50cd021           LDA zAF : CMP zKR : BNE +
+   584  0dcb a90038e528aa           LDA #0 : SEC : SBC zAXX : TAX      ; index of AXX
+   585  0dd1 bd00148540bd0015...    LDA ch_lo,X : STA zCC : LDA ch_hi,X : STA zCC+1   ; car(AXX)
+   586  0ddb a90038e540aa           LDA #0 : SEC : SBC zCC : TAX
+   587  0de1 bd00148514bd0015...    LDA ch_lo,X : STA zEV : LDA ch_hi,X : STA zEV+1   ; car(car(AXX))
+   588  0deb 60                     RTS
+   589                          
+   590                          +:  ; 3332: CDR
+   591  0dec a526c50dd021           LDA zAF : CMP zKD : BNE +
+   592  0df2 a90038e528aa           LDA #0 : SEC : SBC zAXX : TAX
+   593  0df8 bd00148540bd0015...    LDA ch_lo,X : STA zCC : LDA ch_hi,X : STA zCC+1
+   594  0e02 a90038e540aa           LDA #0 : SEC : SBC zCC : TAX
+   595  0e08 bd00168514bd0017...    LDA cd_lo,X : STA zEV : LDA cd_hi,X : STA zEV+1
+   596  0e12 60                     RTS
+   597                          
+   598                          +:  ; 3336: not a builtin — look it up in env (mirrors lisp.bas fix)
+   599  0e13 a526852ca527852d...    +mv16 zSX, zAF : +mv16 zSA, zAA
+   600  0e23 20bc0e                 JSR assoc
+   601  0e26 a5148526a5158527       +mv16 zAF, zEV
+   602  0e2e 4c160d                 JMP apply_
+   603                          
+   604                          ; ============================================================
+   605                          ; 3380 APPLY_LAMBDA
+   606                          !zone applylambda
+   607                          apply_lambda:
+   608                              ; PX = CH[-CD[-AF]]   (car of cdr of lambda = param list)
+   609  0e31 a90038e526aa           LDA #0 : SEC : SBC zAF : TAX
+   610  0e37 bd00168530bd0017...    LDA cd_lo,X : STA zPX : LDA cd_hi,X : STA zPX+1   ; cdr(AF)
+   611  0e41 a90038e530aa           LDA #0 : SEC : SBC zPX : TAX
+   612  0e47 bd00148530bd0015...    LDA ch_lo,X : STA zPX : LDA ch_hi,X : STA zPX+1   ; car(cdr(AF))
+   613                              ; PY = AXX
+   614  0e51 a5288532a5298533       +mv16 zPY, zAXX
+   615                              ; PA = AA
+   616  0e59 a52a8534a52b8535       +mv16 zPA, zAA
+   617  0e61 20290f                 JSR pairlis
+   618                          
+   619                              ; push EA, set EA = pairlis result
+   620  0e64 a604                   LDX zSP
+   621  0e66 a5109d401da5119d...    LDA zEA : STA sk_lo,X : LDA zEA+1 : STA sk_hi,X
+   622  0e70 e604                   INC zSP
+   623  0e72 a5148510a5158511       +mv16 zEA, zEV
+   624                          
+   625                              ; EE = CH[-CD[-CD[-AF]]]  (body = caaddr(lambda))
+   626  0e7a a90038e526aa           LDA #0 : SEC : SBC zAF : TAX
+   627  0e80 bd00168516bd0017...    LDA cd_lo,X : STA zEE : LDA cd_hi,X : STA zEE+1   ; cdr(AF)
+   628  0e8a a90038e516aa           LDA #0 : SEC : SBC zEE : TAX
+   629  0e90 bd00168516bd0017...    LDA cd_lo,X : STA zEE : LDA cd_hi,X : STA zEE+1   ; cdr(cdr(AF))
+   630  0e9a a90038e516aa           LDA #0 : SEC : SBC zEE : TAX
+   631  0ea0 bd00148516bd0015...    LDA ch_lo,X : STA zEE : LDA ch_hi,X : STA zEE+1   ; car(cdr(cdr(AF)))
+   632  0eaa 20fd0a                 JSR eval_
+   633                          
+   634                              ; pop EA
+   635  0ead c604a604               DEC zSP : LDX zSP
+   636  0eb1 bd401d8510bd801d...    LDA sk_lo,X : STA zEA : LDA sk_hi,X : STA zEA+1
+   637  0ebb 60                     RTS
+   638                          
+   639                          ; ============================================================
+   640                          ; 4000 ASSOC
+   641                          !zone assoc
+   642                          assoc:
+   643                              ; 4005: if SA=0, undefined variable
+   644  0ebc a52e052fd017           LDA zSA : ORA zSA+1 : BNE +
+   645                              ; print "?" then atom name
+   646  0ec2 a93f20d2ff             LDA #'?' : JSR CHROUT
+   647  0ec7 a52c8550               LDA zSX : STA zAX       ; zAX = atom index
+   648  0ecb 209a09                 JSR intern_asp          ; zASP = string for zAX
+   649  0ece a54e854ca54f854d       +mv16 zTKP, zASP
+   650  0ed6 205a09                 JSR err_str             ; prints string, CR, jumps to repl
+   651                          
+   652                          +:  ; 4010: if CH[-CH[-SA]] = SX then EV = CD[-CH[-SA]]
+   653  0ed9 a90038e52eaa           LDA #0 : SEC : SBC zSA : TAX
+   654  0edf bd00148540bd0015...    LDA ch_lo,X : STA zCC : LDA ch_hi,X : STA zCC+1   ; CH[-SA] = car(SA)
+   655  0ee9 a90038e540aa           LDA #0 : SEC : SBC zCC : TAX
+   656  0eef bd00148542bd0015...    LDA ch_lo,X : STA zDD : LDA ch_hi,X : STA zDD+1   ; CH[-car(SA)] = caar(SA)
+   657                              ; compare zDD with zSX
+   658  0ef9 a52cc542d017           LDA zSX : CMP zDD : BNE .next
+   659  0eff a900c543d011           LDA #0  : CMP zDD+1 : BNE .next
+   660                              ; found: EV = CD[-CH[-SA]] = cdar(SA)
+   661  0f05 a90038e540aa           LDA #0 : SEC : SBC zCC : TAX
+   662  0f0b bd00168514bd0017...    LDA cd_lo,X : STA zEV : LDA cd_hi,X : STA zEV+1
+   663  0f15 60                     RTS
+   664                          
+   665                          .next:
+   666                              ; 4020: SA = CD[-SA]
+   667  0f16 a90038e52eaa           LDA #0 : SEC : SBC zSA : TAX
+   668  0f1c bd0016852ebd0017...    LDA cd_lo,X : STA zSA : LDA cd_hi,X : STA zSA+1
+   669  0f26 4cbc0e                 JMP assoc
+   670                          
+   671                          ; ============================================================
+   672                          ; 4100 PAIRLIS
+   673                          !zone pairlis
+   674                          pairlis:
+   675  0f29 a900853c853da900...    +clr16 zRG : +clr16 zRS
+   676                          .lp:
+   677                              ; 4105: if PX=0, done
+   678  0f35 a5300531f003           LDA zPX : ORA zPX+1 : BEQ +    ; PX=0 → end of params
+   679  0f3b 4c5a0f                 JMP .body                        ; PX≠0 → main loop body
+   680                          +:  ; PX=0: end of params — link tail to parent env
+   681  0f3e a53e053fd003           LDA zRS : ORA zRS+1 : BNE +
+   682  0f44 4c3c10                 JMP .done                        ; RS=0 → nothing to link
+   683  0f47 a90038e53eaa       +:  LDA #0 : SEC : SBC zRS : TAX
+   684  0f4d a5349d0016a5359d...    LDA zPA : STA cd_lo,X : LDA zPA+1 : STA cd_hi,X
+   685  0f57 4c3c10                 JMP .done
+   686                          .body:
+   687                              ; 4110: PN=CH[-PX], PV=CH[-PY]
+   688  0f5a a90038e530aa           LDA #0 : SEC : SBC zPX : TAX
+   689  0f60 bd00148536bd0015...    LDA ch_lo,X : STA zPN : LDA ch_hi,X : STA zPN+1
+   690  0f6a a90038e532aa           LDA #0 : SEC : SBC zPY : TAX
+   691  0f70 bd00148538bd0015...    LDA ch_lo,X : STA zPV : LDA ch_hi,X : STA zPV+1
+   692                          
+   693                              ; 4115: if PA<>0 and CH[-CH[-PA]]=PN then PA=CD[-PA]
+   694  0f7a a5340535f03c           LDA zPA : ORA zPA+1 : BEQ .noskim
+   695  0f80 a90038e534aa           LDA #0 : SEC : SBC zPA : TAX
+   696  0f86 bd0014853abd0015...    LDA ch_lo,X : STA zPP : LDA ch_hi,X : STA zPP+1   ; CH[-PA]=car(PA)
+   697  0f90 a90038e53aaa           LDA #0 : SEC : SBC zPP : TAX
+   698  0f96 bd0014853abd0015...    LDA ch_lo,X : STA zPP : LDA ch_hi,X : STA zPP+1   ; CH[-car(PA)]=caar(PA)
+   699  0fa0 a53ac536d016           LDA zPP : CMP zPN : BNE .noskim
+   700  0fa6 a53bc537d010           LDA zPP+1 : CMP zPN+1 : BNE .noskim
+   701                              ; PA = CD[-PA]
+   702  0fac a90038e534aa           LDA #0 : SEC : SBC zPA : TAX
+   703  0fb2 bd00168534bd0017...    LDA cd_lo,X : STA zPA : LDA cd_hi,X : STA zPA+1
+   704                          .noskim:
+   705                              ; 4120: cons_alloc(PN, PV) -> PP
+   706  0fbc a5368540a5378541...    +mv16 zCC, zPN : +mv16 zDD, zPV
+   707  0fcc 201311a512853aa5...    JSR cons_alloc : +mv16 zPP, zRV
+   708                              ; 4125: cons_alloc(PP, 0)
+   709  0fd7 a53a8540a53b8541...    +mv16 zCC, zPP : +clr16 zDD
+   710  0fe5 201311                 JSR cons_alloc
+   711                          
+   712                              ; 4130: if RG=0, RG=RS=RV, else CD[-RS]=RV; RS=RV
+   713  0fe8 a53c053dd013           LDA zRG : ORA zRG+1 : BNE .app
+   714  0fee a512853ca513853d...    +mv16 zRG, zRV : +mv16 zRS, zRV : JMP .adv
+   715                          .app:
+   716  1001 a90038e53eaa           LDA #0 : SEC : SBC zRS : TAX
+   717  1007 a5129d0016a5139d...    LDA zRV : STA cd_lo,X : LDA zRV+1 : STA cd_hi,X
+   718  1011 a512853ea513853f       +mv16 zRS, zRV
+   719                          .adv:
+   720                              ; 4145: PX=CD[-PX], PY=CD[-PY]
+   721  1019 a90038e530aa           LDA #0 : SEC : SBC zPX : TAX
+   722  101f bd00168530bd0017...    LDA cd_lo,X : STA zPX : LDA cd_hi,X : STA zPX+1
+   723  1029 a90038e532aa           LDA #0 : SEC : SBC zPY : TAX
+   724  102f bd00168532bd0017...    LDA cd_lo,X : STA zPY : LDA cd_hi,X : STA zPY+1
+   725  1039 4c350f                 JMP .lp
+   726                          
+   727                          .done:
+   728  103c a53c053dd009           LDA zRG : ORA zRG+1 : BNE +
+   729  1042 a5348514a5358515...    +mv16 zEV, zPA : RTS
+   730  104b a53c8514a53d8515...+:  +mv16 zEV, zRG : RTS
+   731                          
+   732                          ; ============================================================
+   733                          ; 5000 PRINT_OBJ
+   734                          !zone printobj
+   735                          print_obj:
+   736                              ; 5002: if PO=0, print "NIL"
+   737  1054 a54a054bd010           LDA zPO : ORA zPO+1 : BNE +
+   738  105a a94e20d2ff             LDA #'N' : JSR CHROUT
+   739  105f a94920d2ff             LDA #'I' : JSR CHROUT
+   740  1064 a94c20d2ff60           LDA #'L' : JSR CHROUT : RTS
+   741                          
+   742                          +:  ; 5004: if PO>0 (atom, hi=0), print atom string
+   743  106a a54bd015               LDA zPO+1 : BNE +
+   744  106e a54a8550               LDA zPO : STA zAX
+   745  1072 209a09                 JSR intern_asp          ; zASP = string for zAX
+   746  1075 a000                   LDY #0
+   747                          .lp:
+   748  1077 b14ef007               LDA (zASP),Y : BEQ .done
+   749  107b 20d2ffc84c7710         JSR CHROUT : INY : JMP .lp
+   750  1082 60                 .done: RTS
+   751                          
+   752                          +:  ; 5006: cons cell — print list
+   753  1083 a92820d2ff             LDA #'(' : JSR CHROUT
+   754                          
+   755                              ; push PO
+   756  1088 a604                   LDX zSP
+   757  108a a54a9dc01da54b9d...    LDA zPO : STA s1_lo,X : LDA zPO+1 : STA s1_hi,X
+   758  1094 e604                   INC zSP
+   759                          
+   760                          .list_loop:
+   761                              ; 5010: PO = CH[-S1[SP]]
+   762  1096 a604ca                 LDX zSP : DEX
+   763  1099 bdc01d853abd001e...    LDA s1_lo,X : STA zPP : LDA s1_hi,X : STA zPP+1   ; S1[SP] in zPP
+   764  10a3 a90038e53aaa           LDA #0 : SEC : SBC zPP : TAX
+   765  10a9 bd0014854abd0015...    LDA ch_lo,X : STA zPO : LDA ch_hi,X : STA zPO+1
+   766  10b3 205410                 JSR print_obj
+   767                          
+   768                              ; 5012: PO = CD[-S1[SP]]
+   769  10b6 a604ca                 LDX zSP : DEX
+   770  10b9 bdc01d853abd001e...    LDA s1_lo,X : STA zPP : LDA s1_hi,X : STA zPP+1
+   771  10c3 a90038e53aaa           LDA #0 : SEC : SBC zPP : TAX
+   772  10c9 bd0016854abd0017...    LDA cd_lo,X : STA zPO : LDA cd_hi,X : STA zPO+1
+   773                          
+   774                              ; pop S1
+   775  10d3 c604                   DEC zSP
+   776                          
+   777                              ; 5014: if PO=0, print ")"
+   778  10d5 a54a054bd006           LDA zPO : ORA zPO+1 : BNE +
+   779  10db a92920d2ff60           LDA #')' : JSR CHROUT : RTS
+   780                          
+   781                          +:  ; 5016: if PO<0 (cons), print " " and continue list
+   782  10e1 a54b3018               LDA zPO+1 : BMI .more
+   783                              ; 5018: PO>0 (atom) — print " . atom )"
+   784  10e5 a92020d2ff             LDA #' ' : JSR CHROUT
+   785  10ea a92e20d2ff             LDA #'.' : JSR CHROUT
+   786  10ef a92020d2ff             LDA #' ' : JSR CHROUT
+   787  10f4 205410                 JSR print_obj
+   788  10f7 a92920d2ff60           LDA #')' : JSR CHROUT : RTS
+   789                          
+   790                          .more:
+   791  10fd a92020d2ff             LDA #' ' : JSR CHROUT
+   792                              ; push PO, loop
+   793  1102 a604                   LDX zSP
+   794  1104 a54a9dc01da54b9d...    LDA zPO : STA s1_lo,X : LDA zPO+1 : STA s1_hi,X
+   795  110e e604                   INC zSP
+   796  1110 4c9610                 JMP .list_loop
+   797                          
+   798                          ; ============================================================
+   799                          ; 6000 CONS_ALLOC
+   800                          !zone consalloc
+   801                          cons_alloc:
+   802  1113 a503c9ff900f           LDA zNC : CMP #255 : BCC +
+   803  1119 a952854ca909854d       LDA #<str_eheap : STA zTKP : LDA #>str_eheap : STA zTKP+1
+   804  1121 a90085044c5a09         LDA #0 : STA zSP : JMP err_str
+   805                          +:
+   806  1128 e603                   INC zNC
+   807  112a a603                   LDX zNC
+   808  112c a5409d0014             LDA zCC   : STA ch_lo,X
+   809  1131 a5419d0015             LDA zCC+1 : STA ch_hi,X
+   810  1136 a5429d0016             LDA zDD   : STA cd_lo,X
+   811  113b a5439d0017             LDA zDD+1 : STA cd_hi,X
+   812                              ; RV = -NC (16-bit: lo = 256-NC, hi = $FF)
+   813  1140 a90038e5038512         LDA #0 : SEC : SBC zNC : STA zRV
+   814  1147 a9ff8513               LDA #$ff : STA zRV+1
+   815  114b 60                     RTS
+   816                          
+   817                          ; ============================================================
+   818                          ; 7000 DUMP
+   819                          !zone dump
+   820                          dump:
+   821                              ; AS:
+   822  114c a94120d2ff             LDA #'A' : JSR CHROUT
+   823  1151 a95320d2ff             LDA #'S' : JSR CHROUT
+   824  1156 a93a20d2ff             LDA #':' : JSR CHROUT
+   825  115b a201                   LDX #1
+   826                          .as_lp:
+   827  115d a502f02d               LDA zNA : BEQ .as_done      ; NA=0, nothing to print
+   828  1161 8ac5029004f002b0...    TXA : CMP zNA : BCC .as_body : BEQ .as_body : BCS .as_done
+   829                          .as_body:
+   830                              ; print " X="
+   831  116a a92020d2ff             LDA #' ' : JSR CHROUT
+   832  116f 8a201612               TXA : JSR print_byte_dec
+   833  1173 a93d20d2ff             LDA #'=' : JSR CHROUT
+   834                              ; print atom string for atom X
+   835  1178 8650209a09             STX zAX : JSR intern_asp
+   836  117d a000                   LDY #0
+   837  117f b14ef007           .asn: LDA (zASP),Y : BEQ .asne
+   838  1183 20d2ffc84c7f11         JSR CHROUT : INY : JMP .asn
+   839                          .asne:
+   840  118a e84c5d11               INX : JMP .as_lp
+   841                          .as_done:
+   842  118e a90d20d2ff             LDA #CR : JSR CHROUT
+   843                          
+   844                              ; CH:
+   845  1193 a94320d2ff             LDA #'C' : JSR CHROUT
+   846  1198 a94820d2ff             LDA #'H' : JSR CHROUT
+   847  119d a93a20d2ff             LDA #':' : JSR CHROUT
+   848  11a2 a201                   LDX #1
+   849                          .ch_lp:
+   850  11a4 a503f027               LDA zNC : BEQ .ch_done
+   851  11a8 8ac5039004f002b0...    TXA : CMP zNC : BCC .ch_body : BEQ .ch_body : BCS .ch_done
+   852                          .ch_body:
+   853  11b1 a92020d2ff             LDA #' ' : JSR CHROUT
+   854  11b6 8a201612               TXA : JSR print_byte_dec
+   855  11ba a93d20d2ff             LDA #'=' : JSR CHROUT
+   856  11bf bd0015201612           LDA ch_hi,X : JSR print_byte_dec
+   857  11c5 bd0014201612           LDA ch_lo,X : JSR print_byte_dec
+   858  11cb e84ca411               INX : JMP .ch_lp
+   859                          .ch_done:
+   860  11cf a90d20d2ff             LDA #CR : JSR CHROUT
+   861                          
+   862                              ; CD:
+   863  11d4 a94320d2ff             LDA #'C' : JSR CHROUT
+   864  11d9 a94420d2ff             LDA #'D' : JSR CHROUT
+   865  11de a93a20d2ff             LDA #':' : JSR CHROUT
+   866  11e3 a201                   LDX #1
+   867                          .cd_lp:
+   868  11e5 a503f027               LDA zNC : BEQ .cd_done
+   869  11e9 8ac5039004f002b0...    TXA : CMP zNC : BCC .cd_body : BEQ .cd_body : BCS .cd_done
+   870                          .cd_body:
+   871  11f2 a92020d2ff             LDA #' ' : JSR CHROUT
+   872  11f7 8a201612               TXA : JSR print_byte_dec
+   873  11fb a93d20d2ff             LDA #'=' : JSR CHROUT
+   874  1200 bd0017201612           LDA cd_hi,X : JSR print_byte_dec
+   875  1206 bd0016201612           LDA cd_lo,X : JSR print_byte_dec
+   876  120c e84ce511               INX : JMP .cd_lp
+   877                          .cd_done:
+   878  1210 a90d20d2ff             LDA #CR : JSR CHROUT
+   879  1215 60                     RTS
+   880                          
+   881                          !zone printbyte
+   882                          ; print_byte_dec: print A as signed decimal (for dump)
+   883                          ; handles 0, positive (1..127), and negative ($ff=$fe=$80 as -1..-128)
+   884                          print_byte_dec:
+   885  1216 f011                   BEQ .zero
+   886  1218 1015                   BPL .pos
+   887                              ; negative: print '-' then negate
+   888  121a 48                     PHA
+   889  121b a92d20d2ff             LDA #'-' : JSR CHROUT
+   890  1220 68                     PLA
+   891  1221 49ff186901             EOR #$ff : CLC : ADC #1     ; negate
+   892  1226 4c2f12                 JMP .pos
+   893                          .zero:
+   894  1229 a93020d2ff60           LDA #'0' : JSR CHROUT : RTS
+   895                          .pos:
+   896                              ; print 1-3 decimal digits for value 1..255
+   897                              ; divide by 100, 10, 1
+   898  122f a200                   LDX #0      ; hundreds
+   899  1231 c9649006           .h: CMP #100 : BCC .tens
+   900  1235 e964e84c3112           SBC #100 : INX : JMP .h
+   901                          .tens:
+   902  123b 48                     PHA
+   903  123c e000f007               CPX #0 : BEQ .skip_h
+   904  1240 8a18693020d2ff         TXA : CLC : ADC #'0' : JSR CHROUT
+   905                          .skip_h:
+   906  1247 68                     PLA
+   907  1248 a200                   LDX #0
+   908  124a c90a9006           .t: CMP #10 : BCC .ones
+   909  124e e90ae84c4a12           SBC #10 : INX : JMP .t
+   910                          .ones:
+   911  1254 48                     PHA
+   912  1255 e000f007               CPX #0 : BEQ .skip_t
+   913  1259 8a18693020d2ff         TXA : CLC : ADC #'0' : JSR CHROUT
+   914                          .skip_t:
+   915  1260 68                     PLA
+   916  1261 18693020d2ff           CLC : ADC #'0' : JSR CHROUT
+   917  1267 60                     RTS
