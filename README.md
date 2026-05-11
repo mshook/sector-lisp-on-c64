@@ -1,4 +1,15 @@
 # sector-lisp-on-c64
+
+2026-05-11
+
+- <https://stigc.dk/c64/basic/> - Paste the .bas into the text window below the C64 screen
+
+- There's a problems with lines longer than 80 characters
+
+
+
+---
+
 Develop a lisp based on the friendly version of SectorLisp that runs on the Commodore 64
 
 There are a number of things to consider:
